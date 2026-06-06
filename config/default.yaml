@@ -1,0 +1,106 @@
+simulation:
+  steps: 90
+  dt: 0.2
+  seed: 7
+
+estimator:
+  # This is only the optimizer start point direction/offset before using all
+  # range factors. It is not a B odometry/dead-reckoning measurement.
+  initial_guess_offset_m: [6.0, -4.0, -2.0]
+  initial_guess_velocity_mps: [0.2, 0.05, -0.02]
+  use_smoothness_factor: true
+  smoothness_accel_sigma_mps2: 0.35
+  use_depth_factor: false
+  depth_sigma_m: 0.10
+  use_usbl_angles: true
+
+  # Range alone leaves two tangent directions on each range sphere unobservable.
+  # This display sigma is a finite visualization of that ambiguity, not a
+  # sensor datasheet value.
+  tangent_uncertainty_sigma_m: 0.35
+
+sensors:
+  diver:
+    range:
+      name: "Sonardyne Micro-Ranger 2 MRT USBL transceiver"
+      model_type: "8243"
+      role: "Diver/underwater handheld-sonar acoustic ranging source"
+      source: "Sonardyne MRT public specification"
+      frequency_band_khz: [20.0, 34.0]
+      max_range_m: 995.0
+      depth_rating_m: 25.0
+      acoustic_coverage_deg: 200.0
+      range_sigma_m: 0.015
+      range_accuracy_note: "Better than 15 mm; modeled here as 1-sigma range noise."
+      angular_accuracy_deg: 3.0
+      angular_accuracy_used: true
+      transmit_source_level_db_re_1upa_at_1m: 184.0
+      electrical:
+        voltage_vdc: 48.0
+        voltage_tolerance_percent: 10.0
+        typical_power_w: 1.5
+        max_power_w: 25.5
+      communication: "Ethernet 100 Mbps"
+      operating_temperature_c: [-5.0, 40.0]
+      storage_temperature_c: [-20.0, 55.0]
+      construction: ["Stainless steel 316", "PVC", "polyurethane"]
+      dimensions_height_diameter_mm: [177.0, 106.0]
+      weight_air_water_kg: [1.84, 0.99]
+  boat:
+    imu:
+      name: "Xsens MTi-30 AHRS"
+      role: "Boat attitude/heading reference for the DLiO-style A pose source"
+      source: "Xsens MTi public output specifications"
+      roll_pitch_rms_static_deg: 0.2
+      roll_pitch_rms_dynamic_deg: 0.5
+      yaw_rms_dynamic_deg: 1.0
+      gyro_standard_full_range_deg_s: 450.0
+      gyro_initial_bias_error_deg_s: 0.2
+      gyro_in_run_bias_stability_deg_h: 18.0
+      gyro_bandwidth_hz: 415.0
+      gyro_noise_density_deg_s_sqrt_hz: 0.03
+      accelerometer_standard_full_range_m_s2: 200.0
+      output_orientation: ["Euler angles", "quaternion", "rotation matrix"]
+      notes:
+        - "Yaw performance assumes suitable filter profile and magnetic conditions."
+        - "The demo covariance below is intentionally not a full datasheet-derived DLiO covariance model."
+    lidar:
+      name: "Velodyne VLP-16 Puck"
+      role: "Boat 3D lidar for the DLiO-style A pose source"
+      source: "Velodyne VLP-16 public datasheet"
+      channels: 16
+      measurement_range_m: 100.0
+      typical_accuracy_m: 0.03
+      points_per_second: 300000
+      horizontal_fov_deg: 360.0
+      vertical_fov_deg: 30.0
+      vertical_fov_limits_deg: [-15.0, 15.0]
+      vertical_angular_resolution_deg: 2.0
+      horizontal_angular_resolution_deg: [0.1, 0.4]
+      rotation_rate_hz: [5.0, 20.0]
+      returns: ["strongest", "last"]
+      power_w: 8.0
+      weight_g: 830.0
+      dimensions_diameter_height_mm: [103.0, 72.0]
+      ingress_protection: "IP67"
+      operating_temperature_c: [-10.0, 60.0]
+
+covariance:
+  # Demo-level assumed DLiO/VLP-16 + Xsens covariance for object A.
+  # This is not a datasheet or calibration claim.
+  a_position_sigma_m: [0.08, 0.08, 0.05]
+  a_orientation_sigma_deg: [1.0, 1.0, 2.0]
+
+scenario:
+  b_start_position_m: [-2.0, 1.5, -2.2]
+  b_velocity_mps: [0.42, -0.06, -0.01]
+  b_motion_amplitude_m: [0.9, 1.1, 0.35]
+  b_motion_frequency_radps: [0.55, 0.38, 0.7]
+  b_motion_phase_deg: [20.0, 115.0, 40.0]
+
+output:
+  output_dir: "outputs"
+  summary_file: "results.txt"
+  summary_plot_file: "range_aided_pose_estimation.png"
+  position_plot_file: "position_estimate.png"
+  video_file: "range_aided_pose_estimation_views.mp4"
