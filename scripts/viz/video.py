@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.animation import FFMpegWriter
 
-from scripts.config import SimConfig
-from scripts.plot_utils import (
+from scripts.configuration.config import SimConfig
+from scripts.viz.plot_utils import (
     axis_limits,
     draw_circle,
     draw_sphere,
@@ -29,21 +29,55 @@ def plot_view_2d(
     equal_aspect: bool,
 ) -> None:
     cfg: SimConfig = data["cfg"]
+    a_true = data.get("a_true_pose", data["a_pose"])[:, :3]
     a = data["a_pose"][:, :3]
     bt = data["b_true_pose"][:, :3]
     be = data["b_est_pose"][:, :3]
     cov = data["b_cov_xyz"]
+    events = data.get("event_landmark_estimates", [])
     d0, d1 = dims
 
-    ax.plot(a[: frame + 1, d0], a[: frame + 1, d1], color="tab:blue", label="known A")
+    ax.plot(
+        a_true[: frame + 1, d0],
+        a_true[: frame + 1, d1],
+        "--",
+        color="tab:cyan",
+        alpha=0.7,
+        label="true A",
+    )
+    ax.plot(
+        a[: frame + 1, d0],
+        a[: frame + 1, d1],
+        color="tab:blue",
+        label="estimated A",
+    )
     ax.scatter(bt[frame, d0], bt[frame, d1], color="tab:green", s=36, label="true B")
-    ax.scatter(be[frame, d0], be[frame, d1], color="tab:red", s=36, label="estimated B")
+    if np.all(np.isfinite(be[frame])):
+        ax.scatter(
+            be[frame, d0],
+            be[frame, d1],
+            color="tab:red",
+            s=36,
+            label="active event B",
+        )
+    for i, event in enumerate(events):
+        if frame >= event["end"]:
+            point = event["l_hat"]
+            ax.scatter(
+                point[d0],
+                point[d1],
+                marker="x",
+                color="tab:purple",
+                s=50,
+                label="archived event" if i == 0 else None,
+            )
     ax.scatter(a[frame, d0], a[frame, d1], color="tab:blue", s=20)
 
     a_radius = 2.0 * max(cfg.a_position_sigma_m[d0], cfg.a_position_sigma_m[d1])
     b_radius = sigma_radius_from_cov(cov[frame])
     draw_circle(ax, (a[frame, d0], a[frame, d1]), a_radius, "tab:blue")
-    draw_circle(ax, (be[frame, d0], be[frame, d1]), b_radius, "tab:red")
+    if np.all(np.isfinite(be[frame])):
+        draw_circle(ax, (be[frame, d0], be[frame, d1]), b_radius, "tab:red")
 
     ax.set_title(title)
     ax.set_xlabel(labels[0])
@@ -57,15 +91,20 @@ def plot_view_2d(
 
 def render_video(path: Path, data) -> None:
     cfg: SimConfig = data["cfg"]
+    a_true = data.get("a_true_pose", data["a_pose"])[:, :3]
     a = data["a_pose"][:, :3]
     bt = data["b_true_pose"][:, :3]
     be = data["b_est_pose"][:, :3]
     cov = data["b_cov_xyz"]
-    lo, hi = axis_limits([a, bt, be], pad=2.0)
+    events = data.get("event_landmark_estimates", [])
+    lo, hi = axis_limits([a_true, a, bt, be], pad=2.0)
+    b_radii = [sigma_radius_from_cov(c) for c in cov]
+    finite_b_radii = [radius for radius in b_radii if np.isfinite(radius)]
     uncertainty_pad = max(
-        2.0 * max(cfg.a_position_sigma_m), max(sigma_radius_from_cov(c) for c in cov)
+        2.0 * max(cfg.a_position_sigma_m),
+        max(finite_b_radii) if finite_b_radii else 0.0,
     )
-    view_lo, view_hi = axis_limits([a, bt, be], pad=uncertainty_pad + 0.8)
+    view_lo, view_hi = axis_limits([a_true, a, bt, be], pad=uncertainty_pad + 0.8)
     view_limits = {
         (0, 1): ((view_lo[0], view_hi[0]), (view_lo[1], view_hi[1])),
         (0, 2): ((view_lo[0], view_hi[0]), (view_lo[2], view_hi[2])),
@@ -114,11 +153,20 @@ def render_video(path: Path, data) -> None:
             )
 
             ax_iso.plot(
+                a_true[: frame + 1, 0],
+                a_true[: frame + 1, 1],
+                a_true[: frame + 1, 2],
+                "--",
+                color="tab:cyan",
+                alpha=0.7,
+                label="true A",
+            )
+            ax_iso.plot(
                 a[: frame + 1, 0],
                 a[: frame + 1, 1],
                 a[: frame + 1, 2],
                 color="tab:blue",
-                label="known A",
+                label="estimated A",
             )
             ax_iso.scatter(
                 bt[frame, 0],
@@ -128,19 +176,35 @@ def render_video(path: Path, data) -> None:
                 s=36,
                 label="true B",
             )
-            ax_iso.scatter(
-                be[frame, 0],
-                be[frame, 1],
-                be[frame, 2],
-                color="tab:red",
-                s=36,
-                label="estimated B",
-            )
+            if np.all(np.isfinite(be[frame])):
+                ax_iso.scatter(
+                    be[frame, 0],
+                    be[frame, 1],
+                    be[frame, 2],
+                    color="tab:red",
+                    s=36,
+                    label="active event B",
+                )
+            for i, event in enumerate(events):
+                if frame >= event["end"]:
+                    point = event["l_hat"]
+                    ax_iso.scatter(
+                        point[0],
+                        point[1],
+                        point[2],
+                        marker="x",
+                        color="tab:purple",
+                        s=55,
+                        label="archived event" if i == 0 else None,
+                    )
             ax_iso.scatter(
                 a[frame, 0], a[frame, 1], a[frame, 2], color="tab:blue", s=22
             )
             draw_sphere(ax_iso, a[frame], 2.0 * max(cfg.a_position_sigma_m), "tab:blue")
-            draw_sphere(ax_iso, be[frame], sigma_radius_from_cov(cov[frame]), "tab:red")
+            if np.all(np.isfinite(be[frame])):
+                draw_sphere(
+                    ax_iso, be[frame], sigma_radius_from_cov(cov[frame]), "tab:red"
+                )
 
             set_equal_3d(ax_iso, lo, hi)
             ax_iso.view_init(elev=24, azim=-45)
@@ -150,7 +214,7 @@ def render_video(path: Path, data) -> None:
             ax_iso.set_zlabel("z [m]")
             ax_iso.legend(fontsize=7)
             fig.suptitle(
-                f"Moving B range-factor fit from known A pose, t={data['t'][frame]:.1f}s"
+                f"Stationary event localization from boat-mounted USBL factors, t={data['t'][frame]:.1f}s"
             )
             fig.tight_layout()
             writer.grab_frame()

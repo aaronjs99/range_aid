@@ -7,8 +7,8 @@ import argparse
 from dataclasses import replace
 from pathlib import Path
 
-from scripts.config import load_config
-from scripts.pipeline import run_demo
+from scripts.app.pipeline import run_demo
+from scripts.configuration.config import load_config
 
 
 def parse_args() -> argparse.Namespace:

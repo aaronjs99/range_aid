@@ -10,6 +10,9 @@ from matplotlib.patches import Circle
 
 def axis_limits(points: Iterable[np.ndarray], pad: float = 1.5):
     xyz = np.vstack(list(points))
+    xyz = xyz[np.all(np.isfinite(xyz), axis=1)]
+    if len(xyz) == 0:
+        xyz = np.zeros((1, 3))
     return xyz.min(axis=0) - pad, xyz.max(axis=0) + pad
 
 
@@ -22,6 +25,8 @@ def set_equal_3d(ax, lo: np.ndarray, hi: np.ndarray) -> None:
 
 
 def sigma_radius_from_cov(cov: np.ndarray, scale: float = 2.0) -> float:
+    if not np.all(np.isfinite(cov)):
+        return float("nan")
     eig = np.linalg.eigvalsh(cov)
     return scale * float(np.sqrt(max(0.0, eig.max())))
 
@@ -29,6 +34,8 @@ def sigma_radius_from_cov(cov: np.ndarray, scale: float = 2.0) -> float:
 def draw_sphere(
     ax, center: np.ndarray, radius: float, color: str, alpha: float = 0.12
 ) -> None:
+    if not np.all(np.isfinite(center)) or not np.isfinite(radius):
+        return
     u = np.linspace(0, 2 * np.pi, 18)
     v = np.linspace(0, np.pi, 10)
     x = center[0] + radius * np.outer(np.cos(u), np.sin(v))
@@ -40,6 +47,8 @@ def draw_sphere(
 def draw_circle(
     ax, xy: tuple[float, float], radius: float, color: str, alpha: float = 0.16
 ) -> None:
+    if not all(np.isfinite(value) for value in xy) or not np.isfinite(radius):
+        return
     ax.add_patch(
         Circle(
             xy, radius=radius, fill=False, edgecolor=color, alpha=alpha, linewidth=1.2

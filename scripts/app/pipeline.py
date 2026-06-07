@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from scripts.config import OutputConfig, SimConfig
-from scripts.estimation import simulate_and_estimate
-from scripts.figures import plot_position_timeseries, plot_summary
-from scripts.reporting import write_summary
-from scripts.video import render_video
+from scripts.configuration.config import OutputConfig, SimConfig
+from scripts.optimization import simulate_and_estimate
+from scripts.reports.summary import write_summary
+from scripts.viz.figures import plot_position_timeseries, plot_summary
+from scripts.viz.video import render_video
 
 
 def run_demo(
