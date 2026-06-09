@@ -98,10 +98,11 @@ still choosing the wrong point on each range sphere.
 
 ## Factor Model Used Here
 
-There are two backends:
+There are three selectable backend names:
 
 - `full`: a local nonlinear moving-target baseline.
 - `cora`: the default event-triggered CORA-style stationary-ping SDP backend.
+- `riemann`: a placeholder that currently delegates to `full`.
 
 ### `full` Baseline
 
@@ -171,15 +172,25 @@ single event:
 [157, 165) 1.6 s
 ```
 
-For each solved ping event it estimates:
+The CORA backend has two anchor modes:
 
 ```text
-a_0, ..., a_{W-1} in R^3 = boat positions in the map frame
-l in R^3                 = stationary underwater transponder location
+fixed_sensor_positions = stable CORA-lite ablation
+  The estimated boat/USBL poses are fixed anchors.
+  The SDP estimates only l in R^3.
+
+boat_variables = larger lifted experiment
+  The SDP estimates a_0, ..., a_{W-1} boat positions and l.
 ```
 
-The boat orientation is fixed from the DLiO-like estimate, and the USBL
-position is:
+The default is `fixed_sensor_positions`. It keeps the range-aided SDP focused
+on the stationary underwater target while still using the DLiO-like boat pose
+and boat-mounted USBL extrinsic correctly. The boat-variable mode is useful for
+experiments, but it is larger, more fragile with a dense SDP solver, and its
+diagnostics are intentionally reported separately.
+
+In both modes, boat orientation is fixed from the DLiO-like estimate, and the
+USBL position is:
 
 ```text
 s_k = a_k + Rhat_A_k * p_A_S_est
@@ -189,7 +200,15 @@ where `p_A_S_est` is the configured boat-to-USBL mount offset. Measurements are
 generated with `T_AS_true` and optimized with `T_AS_est`, so fixed mount biases
 can be simulated without estimating a separate extrinsic at every time step.
 
-For an event with `W` valid ping measurements:
+For a fixed-anchor event with `W` valid ping measurements:
+
+```text
+x = [l]
+x_tilde = [1; x]
+Z = x_tilde x_tilde.T
+```
+
+For a boat-variable event:
 
 ```text
 x = [a_0, ..., a_{W-1}, l]
@@ -211,9 +230,9 @@ and minimizes:
 
 ```text
 range_slack_weight * sum(s_plus + s_minus)
-+ boat_position_prior_terms
-+ boat_displacement_prior_terms
-+ boat_surface_prior_terms
++ optional boat_position_prior_terms in boat_variables mode
++ optional boat_displacement_prior_terms in boat_variables mode
++ optional boat_surface_prior_terms in boat_variables mode
 ```
 
 The boat priors are:
@@ -227,6 +246,18 @@ a_{k,z} ~= 0 with a loose wave-band sigma
 There is no `B_k` smoothness, no B acceleration prior, and no fake B odometry.
 USBL azimuth/elevation are used only by the optional local nonlinear
 refinement, not by the SDP relaxation or its rank diagnostic.
+
+The relaxation also uses physical first- and second-moment bounds:
+
+```text
+Z[0, i] = lifted first moment for coordinate i
+lower_i <= Z[0, i] <= upper_i
+Z[i, i] <= max(abs(lower_i), abs(upper_i))^2
+```
+
+These bounds keep the dense SDP inside the simulated harbor-scale operating
+volume and prevent obviously unphysical recovered landmarks or boat positions
+from being treated as meaningful diagnostics.
 
 This includes the CORA ingredients: range-aided graph construction, lifted
 QCQP, SDP relaxation, primal recovery, feasibility/rank diagnostics,
@@ -358,6 +389,12 @@ estimator:
   depth_sigma_m: 0.10
   cora_window_size: 25
   cora_solve_stride: 5
+  cora_anchor_mode: "fixed_sensor_positions"
+  cora_bound_xy_m: 30.0
+  cora_bound_z_boat_m: 2.0
+  cora_bound_z_target_min_m: -20.0
+  cora_bound_z_target_max_m: 0.0
+  cora_second_moment_bounds: true
   cora_range_slack_weight: 1.0
   cora_boat_prior_weight: 100.0
   cora_boat_displacement_weight: 25.0
@@ -368,7 +405,7 @@ estimator:
   cora_sdp_objective_tol: 1e-6
   cora_sdp_psd_tol: 1e-5
   cora_refine_with_full: true
-  cora_solver: "SCS"
+  cora_solver: "CLARABEL"
   usbl_mount_bias_m: [0.0, 0.0, 0.0]
   usbl_mount_bias_rpy_deg: [0.0, 0.0, 0.0]
 ```
@@ -380,14 +417,17 @@ Available optimizer backends:
   range-aided QCQP lifting, dense CVXPY SDP relaxation, SDP feasibility
   diagnostics, rank diagnostics, primal recovery, and optional local
   refinement.
+- `riemann`: placeholder backend for the future low-rank/Riemannian solver. It
+  currently delegates to `full` and reports that behavior explicitly.
 
 Important backend difference:
 
 - `full` is a local nonlinear baseline and may use moving-target smoothness.
 - `cora` does **not** use artificial target smoothness. It estimates one
   stationary underwater B location per solved ping window from range
-  measurements, boat position priors, boat displacement priors, and a loose
-  surface prior on A.
+  measurements. In the default fixed-anchor mode the boat/USBL poses are fixed
+  anchors; in `boat_variables` mode, boat position priors, boat displacement
+  priors, and a loose surface prior on A are included in the SDP.
 
 The current `cora` backend includes CORA ingredients, but it is still
 educational: it uses a dense CVXPY SDP, not the full performant C++ CORA stack
@@ -415,6 +455,7 @@ scripts/sim/trajectories.py    synthetic A and B trajectory generation
 scripts/optimization/common.py shared optimizer initialization
 scripts/optimization/full.py   current full SciPy least-squares optimizer
 scripts/optimization/cora.py   event CORA-style dense SDP backend
+scripts/optimization/riemann.py placeholder for future low-rank backend
 scripts/reports/summary.py     text summary output
 scripts/viz/figures.py         static PNG plots
 scripts/viz/video.py           four-view MP4 rendering
@@ -478,7 +519,9 @@ outputs/range_aided_pose_estimation_views.mp4
 - range / azimuth / elevation / depth consistency,
 - event-available estimate RMSE,
 - smoothness acceleration RMS,
-- optimizer status.
+- pipeline success for CORA, or optimizer success for `full`,
+- CORA published estimate source and published cost,
+- CORA SDP objective sum and refined local objective sum,
 - CORA SDP status, validity, rank-tight count, certified-tight count, invalid
   reasons, slack feasibility, lower-bound objective, recovered SDP primal
   objective, SDP gap, recovery method, final published event source, and

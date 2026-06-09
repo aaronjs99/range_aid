@@ -183,10 +183,21 @@ def write_summary(path: Path, data) -> None:
         data.get("cora_certified_tight_count", int(np.sum(cora_certified_tight)))
     )
     cora_sdp_all_valid = bool(data.get("cora_sdp_all_valid", False))
+    cora_sdp_diagnostic_success = bool(
+        data.get("cora_sdp_diagnostic_success", cora_sdp_all_valid)
+    )
     cora_local_refinement_success = bool(
         data.get("cora_local_refinement_success", False)
     )
     cora_pipeline_success = bool(data.get("cora_pipeline_success", False))
+    cora_published_estimate_source = str(
+        data.get("cora_published_estimate_source", "none")
+    )
+    cora_published_cost = float(data.get("cora_published_cost", float("nan")))
+    cora_sdp_objective_sum = float(data.get("cora_sdp_objective_sum", float("nan")))
+    cora_refined_local_objective_sum = float(
+        data.get("cora_refined_local_objective_sum", float("nan"))
+    )
     cora_invalid_reasons_by_event = data.get("cora_invalid_reasons_by_event", {})
     cora_statuses = data.get("cora_statuses", [])
     event_landmarks = data.get("event_landmark_estimates", [])
@@ -208,13 +219,24 @@ def write_summary(path: Path, data) -> None:
         refined_objective = float(event.get("refined_local_objective", float("nan")))
         invalid_reasons = tuple(event.get("invalid_reasons", ()))
         invalid_reason_text = ", ".join(invalid_reasons) if invalid_reasons else "none"
+        event_truth = b_true[int(event["start"])]
+        l_sdp_error = (
+            float(np.linalg.norm(l_sdp - event_truth))
+            if np.all(np.isfinite(l_sdp))
+            else float("nan")
+        )
+        l_final_error = (
+            float(np.linalg.norm(l_final - event_truth))
+            if np.all(np.isfinite(l_final))
+            else float("nan")
+        )
         event_lines.append(
             "- event {event_index}: [{start}, {end})\n"
             "  SDP diagnostic: L_sdp=({sx:.4f}, {sy:.4f}, {sz:.4f}) "
             "sdp_status={status} sdp_valid={sdp_valid} "
             "rank_tight={rank_tight} certified_tight={certified_tight} "
-            "rank_ratio={rank_ratio:.6g} gap={gap:.6g} rel_gap={rel_gap:.6g} "
-            "recovery={recovery}\n"
+            "rank_ratio={rank_ratio:.6g} L_sdp_error={l_sdp_error:.4f}m "
+            "gap={gap:.6g} rel_gap={rel_gap:.6g} recovery={recovery}\n"
             "  Feasibility: z00_error={z00_error:.6g} min_eig_Z={min_eig_z:.6g} "
             "psd_violation={psd_violation:.6g} "
             "max_range_constraint_residual={max_range_residual:.6g} "
@@ -223,7 +245,8 @@ def write_summary(path: Path, data) -> None:
             "objective_nonnegative={objective_nonnegative} "
             "invalid_reasons={invalid_reasons}\n"
             "  Final published event estimate: L_final=({fx:.4f}, {fy:.4f}, {fz:.4f}) "
-            "source={final_source} refined_objective={refined_objective:.6g} "
+            "source={final_source} L_final_error={l_final_error:.4f}m "
+            "refined_objective={refined_objective:.6g} "
             "L_refined=({rx:.4f}, {ry:.4f}, {rz:.4f})".format(
                 event_index=event["event_index"],
                 start=event["start"],
@@ -242,6 +265,7 @@ def write_summary(path: Path, data) -> None:
                 rank_tight=event.get("rank_tight", False),
                 certified_tight=event.get("certified_tight", False),
                 rank_ratio=float(event["rank_ratio"]),
+                l_sdp_error=l_sdp_error,
                 gap=float(
                     event.get("sdp_gap", event.get("certificate_gap", float("nan")))
                 ),
@@ -264,6 +288,7 @@ def write_summary(path: Path, data) -> None:
                 objective_nonnegative=event.get("sdp_objective_nonnegative", False),
                 invalid_reasons=invalid_reason_text,
                 final_source=final_source,
+                l_final_error=l_final_error,
                 refined_objective=refined_objective,
             )
         )
@@ -315,6 +340,12 @@ def write_summary(path: Path, data) -> None:
             "- backend formulation: stationary-window range-aided QCQP lifted to dense SDP",
             "- CORA uses no artificial target smoothness: True",
             "- certificate status: SDP diagnostic only; local refinement is reported separately",
+            f"- cora_anchor_mode: {cfg.cora_anchor_mode}",
+            f"- physical_bounds_enabled: True",
+            f"- cora_second_moment_bounds: {cfg.cora_second_moment_bounds}",
+            f"- cora_bound_xy_m: {cfg.cora_bound_xy_m}",
+            f"- cora_bound_z_boat_m: {cfg.cora_bound_z_boat_m}",
+            f"- cora_bound_z_target_m: ({cfg.cora_bound_z_target_min_m}, {cfg.cora_bound_z_target_max_m})",
             f"- cora_window_size: {cfg.cora_window_size}",
             f"- cora_solve_stride: {cfg.cora_solve_stride}",
             f"- cora_solver: {cfg.cora_solver}",
@@ -331,8 +362,13 @@ def write_summary(path: Path, data) -> None:
             f"- rank-tight event graphs: {cora_rank_tight_count}/{cora_window_count}",
             f"- certified-tight event graphs: {cora_certified_tight_count}/{cora_window_count}",
             f"- sdp_all_valid: {cora_sdp_all_valid}",
+            f"- sdp_diagnostic_success: {cora_sdp_diagnostic_success}",
             f"- local_refinement_success: {cora_local_refinement_success}",
             f"- pipeline_success: {cora_pipeline_success}",
+            f"- published_estimate_source: {cora_published_estimate_source}",
+            f"- published_cost: {cora_published_cost:.6g}",
+            f"- sdp_objective_sum: {cora_sdp_objective_sum:.6g}",
+            f"- refined_local_objective_sum: {cora_refined_local_objective_sum:.6g}",
             f"- SDP recovery methods: {sorted(set(recovery_methods))}",
             f"- SDP rank ratio mean: {float(np.mean(finite_rank_ratios)) if len(finite_rank_ratios) else float('nan'):.6g}",
             f"- SDP rank ratio max: {float(np.max(finite_rank_ratios)) if len(finite_rank_ratios) else float('nan'):.6g}",
@@ -344,12 +380,38 @@ def write_summary(path: Path, data) -> None:
             f"- refined local USBL objective sum: {float(np.sum(finite_refined_local_objectives)) if len(finite_refined_local_objectives) else float('nan'):.6g}",
             "- final published estimates use refined USBL range+bearing when refinement is enabled.",
             "- SDP rank/gap diagnostics apply to L_sdp, not to L_final when refinement is used.",
+            *(
+                [
+                    "- SDP diagnostic invalid; published estimate comes from local USBL refinement."
+                ]
+                if not cora_sdp_diagnostic_success
+                and cora_published_estimate_source == "local_refinement"
+                else []
+            ),
             "Invalid SDP reasons:",
             *(invalid_reason_lines or ["- none"]),
             "- previous event factors persist into new event graphs: False",
             "Archived event landmarks:",
             *(event_lines or ["- none"]),
             "- certificate note: certified_tight requires both SDP validity and rank tightness; this is still not a full Riemannian Staircase certificate.",
+        ]
+
+    if cfg.optimizer_backend == "cora":
+        optimizer_lines = [
+            f"pipeline_success: {cora_pipeline_success}",
+            f"sdp_diagnostic_success: {cora_sdp_diagnostic_success}",
+            f"local_refinement_success: {cora_local_refinement_success}",
+            f"published_estimate_source: {cora_published_estimate_source}",
+            f"published_cost: {cora_published_cost:.6g}",
+            f"sdp_objective_sum: {cora_sdp_objective_sum:.6g}",
+            f"refined_local_objective_sum: {cora_refined_local_objective_sum:.6g}",
+            f"optimizer iterations: {data['optimizer'].nfev}",
+        ]
+    else:
+        optimizer_lines = [
+            f"optimizer success: {data['optimizer'].success}",
+            f"optimizer cost: {data['optimizer'].cost:.4f}",
+            f"optimizer iterations: {data['optimizer'].nfev}",
         ]
 
     path.write_text(
@@ -434,9 +496,7 @@ def write_summary(path: Path, data) -> None:
                 f"depth consistency RMSE: {depth_rmse:.4f} m",
                 f"smoothness acceleration RMS: {smoothness_rms:.4f} m/s^2",
                 f"mean B 2-sigma position sphere radius: {mean_2sigma:.4f} m",
-                f"optimizer success: {data['optimizer'].success}",
-                f"optimizer cost: {data['optimizer'].cost:.4f}",
-                f"optimizer iterations: {data['optimizer'].nfev}",
+                *optimizer_lines,
                 f"optimizer backend note: {data.get('optimizer_backend_note', 'none')}",
                 *cora_lines,
                 "",

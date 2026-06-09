@@ -26,6 +26,12 @@ class SimConfig:
     tangent_uncertainty_sigma_m: float
     cora_window_size: int
     cora_solve_stride: int
+    cora_anchor_mode: str
+    cora_bound_xy_m: float
+    cora_bound_z_boat_m: float
+    cora_bound_z_target_min_m: float
+    cora_bound_z_target_max_m: float
+    cora_second_moment_bounds: bool
     cora_range_slack_weight: float
     cora_boat_prior_weight: float
     cora_boat_displacement_weight: float
@@ -147,6 +153,13 @@ def load_config(path: Path) -> tuple[SimConfig, OutputConfig]:
         target_transponder.get("depth_rating_m", boat_usbl["depth_rating_m"])
     )
 
+    cora_anchor_mode = str(estimator.get("cora_anchor_mode", "fixed_sensor_positions"))
+    if cora_anchor_mode not in {"fixed_sensor_positions", "boat_variables"}:
+        raise ValueError(
+            "estimator.cora_anchor_mode must be 'fixed_sensor_positions' "
+            f"or 'boat_variables', got {cora_anchor_mode!r}"
+        )
+
     sim_cfg = SimConfig(
         steps=int(simulation["steps"]),
         dt=float(simulation["dt"]),
@@ -162,6 +175,18 @@ def load_config(path: Path) -> tuple[SimConfig, OutputConfig]:
         tangent_uncertainty_sigma_m=float(estimator["tangent_uncertainty_sigma_m"]),
         cora_window_size=int(estimator.get("cora_window_size", 25)),
         cora_solve_stride=int(estimator.get("cora_solve_stride", 5)),
+        cora_anchor_mode=cora_anchor_mode,
+        cora_bound_xy_m=float(estimator.get("cora_bound_xy_m", 30.0)),
+        cora_bound_z_boat_m=float(estimator.get("cora_bound_z_boat_m", 2.0)),
+        cora_bound_z_target_min_m=float(
+            estimator.get("cora_bound_z_target_min_m", -20.0)
+        ),
+        cora_bound_z_target_max_m=float(
+            estimator.get("cora_bound_z_target_max_m", 0.0)
+        ),
+        cora_second_moment_bounds=bool(
+            estimator.get("cora_second_moment_bounds", True)
+        ),
         cora_range_slack_weight=float(estimator.get("cora_range_slack_weight", 1.0)),
         cora_boat_prior_weight=float(estimator.get("cora_boat_prior_weight", 100.0)),
         cora_boat_displacement_weight=float(

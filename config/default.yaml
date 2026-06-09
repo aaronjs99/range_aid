@@ -26,6 +26,15 @@ estimator:
 
   cora_window_size: 25
   cora_solve_stride: 5
+  # fixed_sensor_positions is the stable CORA-lite ablation: each stationary
+  # event estimates only L from fixed estimated USBL anchors. boat_variables
+  # keeps the larger lifted problem with boat positions in the SDP.
+  cora_anchor_mode: "fixed_sensor_positions"
+  cora_bound_xy_m: 30.0
+  cora_bound_z_boat_m: 2.0
+  cora_bound_z_target_min_m: -20.0
+  cora_bound_z_target_max_m: 0.0
+  cora_second_moment_bounds: true
   cora_range_slack_weight: 1.0
   cora_boat_prior_weight: 100.0
   cora_boat_displacement_weight: 25.0
@@ -41,7 +50,7 @@ estimator:
   cora_sdp_objective_tol: 1e-6
   cora_sdp_psd_tol: 1e-5
   cora_refine_with_full: true
-  cora_solver: "SCS"
+  cora_solver: "CLARABEL"
 
   # Optional fixed calibration mismatch. Measurements are generated with the
   # biased true mount; optimizers use the nominal calibrated mount below.

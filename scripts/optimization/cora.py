@@ -148,10 +148,56 @@ def _coordinate_prior_matrix(
     return q
 
 
+def _position_bounds(kind: str, cfg: SimConfig) -> tuple[tuple[float, float], ...]:
+    xy = float(cfg.cora_bound_xy_m)
+    if kind == "boat":
+        z = float(cfg.cora_bound_z_boat_m)
+        return ((-xy, xy), (-xy, xy), (-z, z))
+    if kind == "target":
+        return (
+            (-xy, xy),
+            (-xy, xy),
+            (
+                float(cfg.cora_bound_z_target_min_m),
+                float(cfg.cora_bound_z_target_max_m),
+            ),
+        )
+    raise ValueError(f"unknown CORA bound kind {kind!r}")
+
+
+def _add_lifted_position_bounds(
+    constraints: list,
+    z: cp.Variable,
+    slc: slice,
+    bounds: tuple[tuple[float, float], ...],
+    cfg: SimConfig,
+) -> None:
+    for axis, (lower, upper) in enumerate(bounds):
+        matrix_idx = 1 + _indices(slc)[axis]
+        constraints.append(z[0, matrix_idx] >= lower)
+        constraints.append(z[0, matrix_idx] <= upper)
+        if cfg.cora_second_moment_bounds:
+            second_moment_bound = max(abs(lower), abs(upper)) ** 2
+            constraints.append(z[matrix_idx, matrix_idx] <= second_moment_bound)
+
+
 def _sensor_offsets_from_boat_poses(a_pose_window: np.ndarray, cfg: SimConfig):
     mount_offset = np.array(cfg.boat_usbl_mount_offset_m)
     return np.array(
         [rotation_from_rpy(*pose[3:6]) @ mount_offset for pose in a_pose_window]
+    )
+
+
+def _sensor_positions_from_boat_poses(
+    a_pose_window: np.ndarray, cfg: SimConfig
+) -> np.ndarray:
+    mount_offset = np.array(cfg.boat_usbl_mount_offset_m)
+    mount_rpy = np.array(cfg.boat_usbl_mount_rpy_rad)
+    return np.array(
+        [
+            sensor_pose_from_boat_pose(pose, mount_offset, mount_rpy)[0]
+            for pose in a_pose_window
+        ]
     )
 
 
@@ -290,6 +336,74 @@ def _failed_cora_result(
     )
 
 
+def _sdp_solution_metrics(
+    z_value: np.ndarray,
+    slack_plus_value: np.ndarray,
+    slack_minus_value: np.ndarray,
+    range_q_matrices: list[tuple[np.ndarray, float]],
+    status: str,
+    sdp_objective: float,
+    cfg: SimConfig,
+) -> dict:
+    sym_z = 0.5 * (z_value + z_value.T)
+    eigvals_raw = np.sort(np.linalg.eigvalsh(sym_z))
+    min_eig_z = float(eigvals_raw[0]) if len(eigvals_raw) else float("nan")
+    psd_violation = (
+        float(max(0.0, -min_eig_z)) if np.isfinite(min_eig_z) else float("nan")
+    )
+    eigvals = np.sort(np.maximum(eigvals_raw, 0.0))[::-1]
+    rank_ratio = (
+        float(eigvals[1] / eigvals[0])
+        if len(eigvals) > 1 and eigvals[0] > 1e-12
+        else 0.0
+    )
+    z00_error = float(abs(z_value[0, 0] - 1.0))
+    min_slack_plus = (
+        float(np.min(slack_plus_value)) if slack_plus_value.size else float("nan")
+    )
+    min_slack_minus = (
+        float(np.min(slack_minus_value)) if slack_minus_value.size else float("nan")
+    )
+    min_slack = float(min(min_slack_plus, min_slack_minus))
+    range_constraint_residuals = [
+        abs(float(np.trace(q_range @ z_value) - range_squared - plus + minus))
+        for (q_range, range_squared), plus, minus in zip(
+            range_q_matrices, slack_plus_value, slack_minus_value
+        )
+    ]
+    max_range_constraint_residual = (
+        float(np.max(range_constraint_residuals))
+        if range_constraint_residuals
+        else float("nan")
+    )
+    sdp_valid, sdp_objective_nonnegative, invalid_reasons = _sdp_validity(
+        status,
+        z00_error,
+        psd_violation,
+        max_range_constraint_residual,
+        min_slack,
+        sdp_objective,
+        cfg,
+    )
+    rank_tight = rank_ratio < cfg.cora_rank_tightness_tol
+    certified_tight = sdp_valid and rank_tight
+    return {
+        "sdp_valid": sdp_valid,
+        "rank_tight": rank_tight,
+        "certified_tight": certified_tight,
+        "invalid_reasons": invalid_reasons,
+        "z00_error": z00_error,
+        "min_eig_z": min_eig_z,
+        "psd_violation": psd_violation,
+        "max_range_constraint_residual": max_range_constraint_residual,
+        "min_slack_plus": min_slack_plus,
+        "min_slack_minus": min_slack_minus,
+        "min_slack": min_slack,
+        "sdp_objective_nonnegative": sdp_objective_nonnegative,
+        "rank_ratio": rank_ratio,
+    }
+
+
 def _recover_primal(
     z_value: np.ndarray, certified_tight: bool
 ) -> tuple[np.ndarray, str, float]:
@@ -312,6 +426,158 @@ def _recover_primal(
     return np.asarray(z_value[1:, 0]).reshape(-1), "column_fallback", rank_ratio
 
 
+def _fixed_anchor_primal_objective(
+    l_hat: np.ndarray,
+    sensor_positions: np.ndarray,
+    measured_ranges_window: np.ndarray,
+    cfg: SimConfig,
+) -> tuple[float, float]:
+    range_errors = [
+        float((l_hat - sensor_position) @ (l_hat - sensor_position) - range_m**2)
+        for sensor_position, range_m in zip(sensor_positions, measured_ranges_window)
+    ]
+    range_slack_sum = float(np.sum(np.abs(range_errors)))
+    return cfg.cora_range_slack_weight * range_slack_sum, range_slack_sum
+
+
+def solve_cora_window_fixed_anchors(
+    event_index: int,
+    event_start: int,
+    event_end: int,
+    measurement_indices: np.ndarray,
+    a_pose: np.ndarray,
+    measured_ranges: np.ndarray,
+    cfg: SimConfig,
+) -> CoraWindowResult:
+    window_size = len(measurement_indices)
+    n = 3
+    lifted_dim = n + 1
+    z = cp.Variable((lifted_dim, lifted_dim), symmetric=True)
+    slack_plus = cp.Variable(window_size, nonneg=True)
+    slack_minus = cp.Variable(window_size, nonneg=True)
+
+    a_pose_window = a_pose[measurement_indices]
+    sensor_positions = _sensor_positions_from_boat_poses(a_pose_window, cfg)
+    constraints = [z >> 0, z[0, 0] == 1.0]
+    range_terms = []
+    range_q_matrices = []
+    l_slc = slice(0, 3)
+    _add_lifted_position_bounds(
+        constraints, z, l_slc, _position_bounds("target", cfg), cfg
+    )
+
+    for local_k, global_k in enumerate(measurement_indices):
+        q_range = _weighted_affine_norm_matrix(
+            [(l_slc, 1.0)],
+            sensor_positions[local_k],
+            np.ones(3),
+            n,
+        )
+        range_expr = cp.trace(q_range @ z)
+        range_q_matrices.append((q_range, float(measured_ranges[global_k] ** 2)))
+        constraints.append(
+            range_expr - measured_ranges[global_k] ** 2
+            == slack_plus[local_k] - slack_minus[local_k]
+        )
+        range_terms.append(slack_plus[local_k] + slack_minus[local_k])
+
+    objective = cp.Minimize(
+        cfg.cora_range_slack_weight * cp.sum(cp.hstack(range_terms))
+    )
+    problem = cp.Problem(objective, constraints)
+    solve_kwargs = {"solver": cfg.cora_solver, "verbose": False}
+    if cfg.cora_solver.upper() == "SCS":
+        solve_kwargs.update({"eps": 1e-4, "max_iters": 5000})
+
+    try:
+        problem.solve(**solve_kwargs)
+    except Exception as exc:  # pragma: no cover - defensive reporting path
+        return _failed_cora_result(
+            event_index,
+            event_start,
+            event_end,
+            measurement_indices,
+            f"error:{type(exc).__name__}",
+            0,
+        )
+
+    if z.value is None:
+        return _failed_cora_result(
+            event_index,
+            event_start,
+            event_end,
+            measurement_indices,
+            str(problem.status),
+            0,
+        )
+
+    slack_plus_value = (
+        np.asarray(slack_plus.value, dtype=float)
+        if slack_plus.value is not None
+        else np.full(window_size, np.nan)
+    )
+    slack_minus_value = (
+        np.asarray(slack_minus.value, dtype=float)
+        if slack_minus.value is not None
+        else np.full(window_size, np.nan)
+    )
+    sdp_objective = float(problem.value) if problem.value is not None else float("nan")
+    metrics = _sdp_solution_metrics(
+        z.value,
+        slack_plus_value,
+        slack_minus_value,
+        range_q_matrices,
+        str(problem.status),
+        sdp_objective,
+        cfg,
+    )
+    recovered, recovery_method, rank_ratio = _recover_primal(
+        z.value, metrics["certified_tight"]
+    )
+    l_hat_sdp = recovered[l_slc]
+    sdp_primal_objective, recovered_slack_sum = _fixed_anchor_primal_objective(
+        l_hat_sdp,
+        sensor_positions,
+        measured_ranges[measurement_indices],
+        cfg,
+    )
+    gap, relative_gap = _certificate_gap(sdp_primal_objective, sdp_objective)
+    slack_sum = float(np.sum(slack_plus_value + slack_minus_value))
+
+    return CoraWindowResult(
+        event_index=event_index,
+        start=event_start,
+        end=event_end,
+        indices=tuple(int(i) for i in measurement_indices),
+        status=str(problem.status),
+        sdp_valid=metrics["sdp_valid"],
+        rank_tight=metrics["rank_tight"],
+        certified_tight=metrics["certified_tight"],
+        invalid_reasons=metrics["invalid_reasons"],
+        z00_error=metrics["z00_error"],
+        min_eig_z=metrics["min_eig_z"],
+        psd_violation=metrics["psd_violation"],
+        max_range_constraint_residual=metrics["max_range_constraint_residual"],
+        min_slack_plus=metrics["min_slack_plus"],
+        min_slack_minus=metrics["min_slack_minus"],
+        min_slack=metrics["min_slack"],
+        sdp_objective_nonnegative=metrics["sdp_objective_nonnegative"],
+        sdp_objective=sdp_objective,
+        sdp_primal_objective=sdp_primal_objective,
+        sdp_gap=gap,
+        sdp_relative_gap=relative_gap,
+        slack_sum=slack_sum,
+        rank_ratio=rank_ratio,
+        recovery_method=recovery_method,
+        l_hat_sdp=l_hat_sdp,
+        a_hat_window_sdp=a_pose_window[:, :3].copy(),
+        l_hat_refined=np.full(3, np.nan),
+        l_hat_final=l_hat_sdp,
+        refinement_used=False,
+        refined_local_objective=float("nan"),
+    )
+
+
 def solve_cora_window(
     event_index: int,
     event_start: int,
@@ -322,6 +588,19 @@ def solve_cora_window(
     measured_depths: np.ndarray,
     cfg: SimConfig,
 ) -> CoraWindowResult:
+    if cfg.cora_anchor_mode == "fixed_sensor_positions":
+        return solve_cora_window_fixed_anchors(
+            event_index,
+            event_start,
+            event_end,
+            measurement_indices,
+            a_pose,
+            measured_ranges,
+            cfg,
+        )
+    if cfg.cora_anchor_mode != "boat_variables":
+        raise ValueError(f"unknown CORA anchor mode {cfg.cora_anchor_mode!r}")
+
     window_size = len(measurement_indices)
     n = state_dim(window_size)
     lifted_dim = n + 1
@@ -349,9 +628,15 @@ def solve_cora_window(
     range_q_matrices = []
     objective_terms = []
     l_slc = l_slice(window_size)
+    _add_lifted_position_bounds(
+        constraints, z, l_slc, _position_bounds("target", cfg), cfg
+    )
 
     for local_k, global_k in enumerate(measurement_indices):
         a_slc = a_slice(local_k)
+        _add_lifted_position_bounds(
+            constraints, z, a_slc, _position_bounds("boat", cfg), cfg
+        )
         q_range = _weighted_affine_norm_matrix(
             [(l_slc, 1.0), (a_slc, -1.0)],
             sensor_offsets[local_k],
@@ -424,19 +709,6 @@ def solve_cora_window(
             window_size,
         )
 
-    sym_z = 0.5 * (z.value + z.value.T)
-    eigvals_raw = np.sort(np.linalg.eigvalsh(sym_z))
-    min_eig_z = float(eigvals_raw[0]) if len(eigvals_raw) else float("nan")
-    psd_violation = (
-        float(max(0.0, -min_eig_z)) if np.isfinite(min_eig_z) else float("nan")
-    )
-    eigvals = np.sort(np.maximum(eigvals_raw, 0.0))[::-1]
-    rank_ratio = (
-        float(eigvals[1] / eigvals[0])
-        if len(eigvals) > 1 and eigvals[0] > 1e-12
-        else 0.0
-    )
-    z00_error = float(abs(z.value[0, 0] - 1.0))
     slack_plus_value = (
         np.asarray(slack_plus.value, dtype=float)
         if slack_plus.value is not None
@@ -447,37 +719,19 @@ def solve_cora_window(
         if slack_minus.value is not None
         else np.full(window_size, np.nan)
     )
-    min_slack_plus = (
-        float(np.min(slack_plus_value)) if slack_plus_value.size else float("nan")
-    )
-    min_slack_minus = (
-        float(np.min(slack_minus_value)) if slack_minus_value.size else float("nan")
-    )
-    min_slack = float(min(min_slack_plus, min_slack_minus))
-    range_constraint_residuals = [
-        abs(float(np.trace(q_range @ z.value) - range_squared - plus + minus))
-        for (q_range, range_squared), plus, minus in zip(
-            range_q_matrices, slack_plus_value, slack_minus_value
-        )
-    ]
-    max_range_constraint_residual = (
-        float(np.max(range_constraint_residuals))
-        if range_constraint_residuals
-        else float("nan")
-    )
     sdp_objective = float(problem.value) if problem.value is not None else float("nan")
-    sdp_valid, sdp_objective_nonnegative, invalid_reasons = _sdp_validity(
+    metrics = _sdp_solution_metrics(
+        z.value,
+        slack_plus_value,
+        slack_minus_value,
+        range_q_matrices,
         str(problem.status),
-        z00_error,
-        psd_violation,
-        max_range_constraint_residual,
-        min_slack,
         sdp_objective,
         cfg,
     )
-    rank_tight = rank_ratio < cfg.cora_rank_tightness_tol
-    certified_tight = sdp_valid and rank_tight
-    recovered, recovery_method, rank_ratio = _recover_primal(z.value, certified_tight)
+    recovered, recovery_method, rank_ratio = _recover_primal(
+        z.value, metrics["certified_tight"]
+    )
     a_hat_window = recovered[: 3 * window_size].reshape(window_size, 3)
     l_hat_sdp = recovered[l_slc]
     sdp_primal_objective, recovered_slack_sum = _primal_objective(
@@ -498,18 +752,18 @@ def solve_cora_window(
         end=event_end,
         indices=tuple(int(i) for i in measurement_indices),
         status=str(problem.status),
-        sdp_valid=sdp_valid,
-        rank_tight=rank_tight,
-        certified_tight=certified_tight,
-        invalid_reasons=invalid_reasons,
-        z00_error=z00_error,
-        min_eig_z=min_eig_z,
-        psd_violation=psd_violation,
-        max_range_constraint_residual=max_range_constraint_residual,
-        min_slack_plus=min_slack_plus,
-        min_slack_minus=min_slack_minus,
-        min_slack=min_slack,
-        sdp_objective_nonnegative=sdp_objective_nonnegative,
+        sdp_valid=metrics["sdp_valid"],
+        rank_tight=metrics["rank_tight"],
+        certified_tight=metrics["certified_tight"],
+        invalid_reasons=metrics["invalid_reasons"],
+        z00_error=metrics["z00_error"],
+        min_eig_z=metrics["min_eig_z"],
+        psd_violation=metrics["psd_violation"],
+        max_range_constraint_residual=metrics["max_range_constraint_residual"],
+        min_slack_plus=metrics["min_slack_plus"],
+        min_slack_minus=metrics["min_slack_minus"],
+        min_slack=metrics["min_slack"],
+        sdp_objective_nonnegative=metrics["sdp_objective_nonnegative"],
         sdp_objective=sdp_objective,
         sdp_primal_objective=sdp_primal_objective,
         sdp_gap=gap,
@@ -885,6 +1139,7 @@ def simulate_and_estimate(cfg: SimConfig) -> dict:
     rank_tight_count = int(np.sum(rank_tight_flags))
     certified_tight_count = int(np.sum(certified_tight_flags))
     sdp_all_valid = bool(window_results) and bool(np.all(sdp_valid_flags))
+    sdp_diagnostic_success = sdp_all_valid
     local_refinement_success = bool(window_results) and all(
         result.refinement_used
         and np.all(np.isfinite(result.l_hat_final))
@@ -899,14 +1154,36 @@ def simulate_and_estimate(cfg: SimConfig) -> dict:
         for result in window_results
         if not result.sdp_valid
     }
+    if window_results and all(result.refinement_used for result in window_results):
+        published_estimate_source = "local_refinement"
+    elif window_results and all(
+        not result.refinement_used for result in window_results
+    ):
+        published_estimate_source = "sdp_recovery"
+    elif window_results:
+        published_estimate_source = "mixed"
+    else:
+        published_estimate_source = "none"
+    sdp_objective_sum = float(np.nansum(sdp_objectives))
+    refined_local_objective_sum = float(np.nansum(refined_local_objectives))
+    sdp_primal_objective_sum = float(np.nansum(sdp_primal_objectives))
+    if published_estimate_source in {"local_refinement", "mixed"}:
+        published_cost = refined_local_objective_sum
+    else:
+        published_cost = sdp_primal_objective_sum
     optimizer = SimpleNamespace(
         success=pipeline_success,
-        cost=float(np.nansum(sdp_objectives)),
+        cost=published_cost,
         nfev=len(window_results),
         status=",".join(sorted(set(statuses))) if statuses else "not_run",
         sdp_all_valid=sdp_all_valid,
+        sdp_diagnostic_success=sdp_diagnostic_success,
         local_refinement_success=local_refinement_success,
         pipeline_success=pipeline_success,
+        published_estimate_source=published_estimate_source,
+        published_cost=published_cost,
+        sdp_objective_sum=sdp_objective_sum,
+        refined_local_objective_sum=refined_local_objective_sum,
     )
 
     return {
@@ -950,8 +1227,14 @@ def simulate_and_estimate(cfg: SimConfig) -> dict:
         "cora_rank_tight_count": rank_tight_count,
         "cora_certified_tight_count": certified_tight_count,
         "cora_sdp_all_valid": sdp_all_valid,
+        "cora_sdp_diagnostic_success": sdp_diagnostic_success,
         "cora_local_refinement_success": local_refinement_success,
         "cora_pipeline_success": pipeline_success,
+        "cora_published_estimate_source": published_estimate_source,
+        "cora_published_cost": published_cost,
+        "cora_sdp_objective_sum": sdp_objective_sum,
+        "cora_sdp_primal_objective_sum": sdp_primal_objective_sum,
+        "cora_refined_local_objective_sum": refined_local_objective_sum,
         "cora_invalid_reasons_by_event": invalid_reasons_by_event,
         "cora_refined_local_objectives": refined_local_objectives,
         "cora_objectives": sdp_objectives,
