@@ -95,7 +95,7 @@ source control unless reduced to a compact reviewed summary.
 
 ## Workspace Role
 
-`range_aid` is useful for acoustic-localization experiments and future LASAM
+`range_aid` is useful for acoustic-localization experiments and future graph
 factor design. Production GRANDE localization currently uses LiDAR-inertial
 odometry plus RTAB-Map global mapping; acoustic range factors are future graph
 evidence, not a replacement for the current runtime stack.
