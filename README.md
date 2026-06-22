@@ -56,7 +56,6 @@ boat origin or the boat frame is not aligned with the map frame.
 | --- | --- |
 | `full` | Local nonlinear moving-target baseline |
 | `cora` | Event-triggered stationary-target CORA-style SDP backend |
-| `riemann` | Placeholder that currently delegates to `full` |
 
 ### `full`
 
