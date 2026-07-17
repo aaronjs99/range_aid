@@ -5,7 +5,9 @@ target localization. It models a surface USV carrying a USBL transceiver and an
 underwater target carrying a transponder.
 
 This package is not part of the active GRANDE runtime. It is a compact,
-readable experiment for studying acoustic range and bearing constraints.
+readable experiment for studying acoustic range and bearing constraints. It
+does not launch from `grande/run.py`, publish a production ROS interface, or
+contribute to real-time navigation decisions.
 
 ## Problem
 
