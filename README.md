@@ -1,109 +1,146 @@
-# Range-Aided Pose Estimation Demo
+# Range-Aided Pose Estimation
 
-`range_aid` is a standalone Python research demo for range-aided underwater
-target localization. It models a surface USV carrying a USBL transceiver and an
-underwater target carrying a transponder.
+`range_aid` is GRANDE's bounded, shadow-only research path for adding surveyed
+acoustic range constraints to LiDAR-inertial odometry. It publishes an
+inspectable alternate odometry stream and correction proposals, but it never
+publishes TF, replaces the active navigation state, or promotes itself into
+the controller.
 
-This package is not part of the active GRANDE runtime. It is a compact,
-readable experiment for studying acoustic range and bearing constraints. It
-does not launch from `grande/run.py`, publish a production ROS interface, or
-contribute to real-time navigation decisions.
+The package also retains the earlier offline target-localization experiments.
+The online path and offline experiments share the same sensor-frame geometry,
+but they answer different questions and must not be treated as interchangeable.
 
-## Problem
+## Runtime Contract
 
-The simulated system has:
+| Topic | Type | Meaning |
+| --- | --- | --- |
+| `/range_aid/observations` | `range_aid/RangeObservation` | Validated range to a named surveyed landmark, including source and synthetic provenance |
+| `/range_aid/odometry_shadow` | `nav_msgs/Odometry` | Alternate bounded estimate for comparison only |
+| `/range_aid/correction_proposal` | `range_aid/CorrectionProposal` | Gated, non-authoritative correction candidate |
+| `/range_aid/status` | `range_aid/RangeAidStatus` | Backend, coverage, residual, observability, certification, and gate state |
 
-- a surface boat with a noisy LiDAR-inertial pose estimate,
-- a fixed USBL sensor extrinsic on the boat,
-- an underwater target or landmark,
-- acoustic range and optional azimuth/elevation observations, and
-- optional depth or smoothness priors depending on the backend.
+The canonical names live in `config/runtime_surface.yaml`. GRANDE records these
+topics in runtime, raw, and SLAM profiles and exposes the status as a diagnostic
+domain. Range-aid availability does not gate mapping or water autonomy.
 
-The estimator solves for target position. It does not estimate the target's
-full 6-DoF pose.
+## Online Model
 
-## Measurement Model
-
-USBL measurements are sensor-frame measurements, not world-frame measurements.
-At time `k`:
-
-```text
-A_k_true = true boat pose in map
-A_k_est  = estimated boat pose used by the optimizer
-T_A_S    = fixed boat-to-USBL transform
-B_k      = target position in map
-S_k      = A_k * T_A_S
-```
-
-The target vector in the USBL frame is:
+Let `X_k` be the map-frame boat pose, `T_BS` the fixed transform from boat to
+the acoustic sensor, and `L_j` a surveyed landmark. For a scalar observation
+`z_kj`, the factor residual is
 
 ```text
-q_k = R_S_k.T @ (B_k - p_S_k)
+r_kj = || translation(X_k * T_BS) - L_j ||_2 - z_kj .
 ```
 
-Predicted acoustic observations are:
+Odometry supplies relative factors
 
 ```text
-range     = norm(q_k)
-azimuth   = atan2(q_y, q_x)
-elevation = atan2(q_z, hypot(q_x, q_y))
+Delta_k = inverse(X_(k-1)^odom) * X_k^odom
+r_odom,k = Log(inverse(Delta_k) * inverse(X_(k-1)) * X_k).
 ```
 
-This sensor-frame formulation is required whenever the USBL is offset from the
-boat origin or the boat frame is not aligned with the map frame.
+The active objective is a robust nonlinear least-squares problem:
 
-## Backends
+```text
+min_X  ||r_prior||^2 + sum_k ||r_odom,k||^2
+       + sum_(k,j) Huber(r_kj / sigma_kj).
+```
 
-| Backend | Purpose |
-| --- | --- |
-| `full` | Local nonlinear moving-target baseline |
-| `cora` | Event-triggered stationary-target CORA-style SDP backend |
+Known landmarks are represented as tightly rotation-constrained `Pose3`
+variables because the installed GTSAM Python binding's native
+`RangeFactorWithTransformPose3` requires two `Pose3` keys. Only their
+translation affects the range residual.
 
-### `full`
+## Bounded Incremental Estimation
 
-The `full` backend estimates a target position at every time step and can use
-range, optional bearing, optional depth, and optional smoothness. Smoothness is a
-modeling prior, not a real target odometry measurement.
+IG Handle's GTSAM Python binding exposes iSAM2 but not either fixed-lag
+smoother class. `RebuildingFixedLagSmoother` therefore:
 
-### `cora`
+1. updates iSAM2 incrementally while states remain inside the configured lag;
+2. retains at most `max_pose_count` states and `lag_sec` seconds of history;
+3. rebuilds the active graph when old states leave the lag;
+4. carries the prior estimate of the new boundary state with conservative
+   configured uncertainty.
 
-The `cora` backend estimates stationary event landmarks during explicit ping
-windows. It does not use target smoothness and does not invent target odometry.
-After a ping event, the recovered landmark is archived.
+This keeps runtime and memory bounded. It is not exact Bayes-tree
+marginalization, and the status names the backend `bounded_rebuilding_isam2`
+so that limitation remains visible.
 
-The default CORA mode fixes the estimated boat/USBL poses as anchors and solves
-for the landmark. The larger boat-variable mode also estimates boat positions
-inside the event window and reports diagnostics separately.
+## Gates And Certification
 
-## Why Range Alone Is Ambiguous
+Observations are rejected when their landmark is unknown, values are nonfinite
+or outside bounds, or timestamp association exceeds the configured tolerance.
+A correction candidate also requires minimum range coverage, translational
+observability rank, bounded condition number, low residual, and bounded pose
+correction.
 
-One scalar range measurement constrains a 3D target to a sphere around the USBL
-sensor. A moving target with one range per time step has three position
-unknowns and one scalar measurement per step, so additional information or
-priors are required for a meaningful estimate.
+An asynchronous CVXPY semidefinite diagnostic independently solves each
+fixed-pose landmark snapshot and reports rank tightness and constraint
+residual. It is intentionally called `cora_landmark_snapshot_diagnostic`:
+it does not certify the full nonlinear pose graph. Certification runs outside
+the odometry callback so solver latency cannot block the state stream.
 
-## Typical Use
+Even when every gate passes:
 
-Install Python dependencies in the environment used for the demo:
+- `navigation_eligible` remains false;
+- no `map -> odom`, `odom -> base_link`, or sensor TF is published;
+- no surveyed real landmark is inferred from imaging-sonar packets;
+- no runtime correction is automatically approved.
+
+## Imaging Sonar Is Separate
+
+The Session 5 imaging sonar currently provides raw UDP datagrams on
+`/sensors/sonar/raw`. Its model-specific decoder has not been established.
+Those datagrams are not USBL ranges and cannot feed this estimator. A real
+range-aid deployment requires a compatible ranging source, a surveyed landmark
+position and uncertainty, and a physically measured sensor extrinsic.
+
+The simulation source publishes explicitly synthetic observations and marks
+them calibration-ineligible. Synthetic evidence validates contracts and
+estimator behavior, not real localization accuracy.
+
+## Running
+
+Build the package and GRANDE dependency closure:
 
 ```bash
-pip install numpy scipy matplotlib pyyaml
+cd ~/catkin_ws/heron_ws
+catkin build range_aid grande --no-status --summarize
 ```
 
-Run a backend from the package scripts or notebooks configured for the active
-experiment. Generated plots, videos, and dense trial output should stay outside
-source control unless reduced to a compact reviewed summary.
+Run the canonical isolated simulator regression:
 
-## Workspace Role
+```bash
+cd ~/catkin_ws/heron_ws/src/grande
+python3 grande/run.py --session s5.0 run 0.4 --yes
+```
 
-`range_aid` is useful for acoustic-localization experiments and future graph
-factor design. Production GRANDE localization currently uses LiDAR-inertial
-odometry plus RTAB-Map global mapping; acoustic range factors are future graph
-evidence, not a replacement for the current runtime stack.
+Direct launch remains available for diagnosis:
 
-## Development Notes
+```bash
+roslaunch grande bringup.launch \
+  mode:=sim use_range_aid:=true range_aid_mode:=shadow \
+  range_aid_synthetic_source:=true
+```
 
-- Keep the sensor-frame measurement model explicit.
-- Separate measurement generation from estimator inputs.
-- Report rank, residual, and physical-bounds diagnostics for SDP experiments.
-- Do not interpret a feasible range-only solution as a unique ground truth.
+## Configuration Ownership
+
+- `config/online.yaml` owns lag, noise, robust-loss, gate, certification,
+  extrinsic, and landmark values.
+- `config/runtime_surface.yaml` owns ROS topic names.
+- `launch/range_aid.launch` adapts those contracts to ROS.
+- `grande/launch/bringup.launch` owns optional lifecycle integration.
+- `grande/tests/s5.0/test_0_4.yaml` owns the integrated regression scenario.
+
+Do not place physical calibration in a session file. Replace the placeholder
+sensor transform and landmark only with measured values and preserve their
+source and uncertainty.
+
+## Remaining Real-World Evidence
+
+Before range corrections can be considered for navigation, collect a surveyed
+range dataset with synchronized 6-DoF odometry, exercise geometry that makes
+3D translation observable, evaluate held-out residuals and multi-step drift,
+verify timing and extrinsics, and compare against the unchanged odometry
+baseline. Promotion needs explicit review; new data alone is never approval.

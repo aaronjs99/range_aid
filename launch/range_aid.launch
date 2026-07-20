@@ -1,0 +1,39 @@
+<launch>
+  <arg name="mode" default="shadow"/>
+  <arg name="config_file" default="$(find range_aid)/config/online.yaml"/>
+  <arg name="runtime_surface_file" default="$(find range_aid)/config/runtime_surface.yaml"/>
+  <arg name="config_eval" default="$(eval open(find('mariner') + '/launch/include/config_launch_eval.py').read())"/>
+  <arg name="odometry_topic" default="/state/odometry_6dof"/>
+  <arg name="observation_topic" default="$(eval eval(arg('config_eval'))(arg('runtime_surface_file'), 'topics.observations'))"/>
+  <arg name="shadow_odometry_topic" default="$(eval eval(arg('config_eval'))(arg('runtime_surface_file'), 'topics.odometry_shadow'))"/>
+  <arg name="correction_proposal_topic" default="$(eval eval(arg('config_eval'))(arg('runtime_surface_file'), 'topics.correction_proposal'))"/>
+  <arg name="status_topic" default="$(eval eval(arg('config_eval'))(arg('runtime_surface_file'), 'topics.status'))"/>
+  <arg name="synthetic_source" default="false"/>
+  <arg name="synthetic_truth_topic" default="/pose_gt"/>
+  <arg name="synthetic_rate_hz" default="3.0"/>
+  <arg name="synthetic_sigma_m" default="0.05"/>
+  <arg name="synthetic_dropout_probability" default="0.05"/>
+  <arg name="synthetic_outlier_probability" default="0.01"/>
+
+  <node pkg="range_aid" type="range_aid_node.py" name="range_aid" output="screen">
+    <param name="mode" value="$(arg mode)"/>
+    <param name="config_file" value="$(arg config_file)"/>
+    <param name="odometry_topic" value="$(arg odometry_topic)"/>
+    <param name="observation_topic" value="$(arg observation_topic)"/>
+    <param name="shadow_odometry_topic" value="$(arg shadow_odometry_topic)"/>
+    <param name="correction_proposal_topic" value="$(arg correction_proposal_topic)"/>
+    <param name="status_topic" value="$(arg status_topic)"/>
+  </node>
+
+  <node if="$(arg synthetic_source)"
+        pkg="range_aid" type="synthetic_range_source.py"
+        name="synthetic_range_source" output="screen">
+    <param name="config_file" value="$(arg config_file)"/>
+    <param name="input_topic" value="$(arg synthetic_truth_topic)"/>
+    <param name="output_topic" value="$(arg observation_topic)"/>
+    <param name="rate_hz" value="$(arg synthetic_rate_hz)"/>
+    <param name="sigma_m" value="$(arg synthetic_sigma_m)"/>
+    <param name="dropout_probability" value="$(arg synthetic_dropout_probability)"/>
+    <param name="outlier_probability" value="$(arg synthetic_outlier_probability)"/>
+  </node>
+</launch>

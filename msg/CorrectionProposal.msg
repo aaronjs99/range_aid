@@ -1,0 +1,13 @@
+std_msgs/Header header
+uint64 graph_epoch
+geometry_msgs/PoseWithCovariance pose
+string source_odometry_topic
+string landmark_id
+uint32 range_measurement_count
+uint8 translational_observability_rank
+float64 observability_condition
+float64 range_residual_rms_m
+bool candidate_gate_passed
+bool navigation_eligible
+bool synthetic_evidence
+string[] gate_reasons

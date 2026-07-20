@@ -1,0 +1,9 @@
+std_msgs/Header header
+string landmark_id
+float64 range_m
+float64 variance_m2
+bool has_bearing
+float64 azimuth_rad
+float64 elevation_rad
+bool synthetic
+string source

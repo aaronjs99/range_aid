@@ -1,0 +1,8 @@
+topics:
+  observations: /range_aid/observations
+  odometry_shadow: /range_aid/odometry_shadow
+  correction_proposal: /range_aid/correction_proposal
+  status: /range_aid/status
+
+services:
+  reset: /range_aid/reset
