@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+import sys
 
 import numpy as np
 import rospy
 from nav_msgs.msg import Odometry
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from range_aid.models import load_online_config
 from range_aid.msg import RangeObservation

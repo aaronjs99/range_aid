@@ -17,6 +17,40 @@ Marginal covariance is explicitly labeled
 influence, but do not undo fixed-lag marginalization or establish statistical
 consistency. Promotion requires held-out NEES/NIS and coverage evidence.
 
+## Code structure and ownership
+
+There is one flat Python source root: `scripts/`. A lightweight
+`scripts/range_aid.py` package bridge exposes those modules together with
+catkin's generated `range_aid.msg`; the repository-local synthetic demo imports
+the same root as `scripts`. There is no second `src/`, `nodes/`, or
+`scripts/range_aid/` implementation tree.
+
+Catkin installs the bridge as `range_aid/__init__.py` and installs only the four
+reusable online subpackages. The synthetic experiment modules stay
+repository-local behind `run.py`, so runtime deployments do not carry plotting,
+video, or dense-study code they never execute.
+The generated devel-space initializer extends `range_aid.__path__` to the same
+flat source root, so downstream packages can import both `range_aid.msg` and
+`range_aid.archive` after sourcing the workspace.
+
+| Path | Single responsibility |
+| --- | --- |
+| `scripts/range_aid_node.py` | Thin ROS orchestration for the shadow estimator |
+| `scripts/estimation/` | Fixed-lag GTSAM state and accepted RTAB-Map closures |
+| `scripts/archive/` | Immutable event storage and deterministic full-batch rebuild |
+| `scripts/certification/` | Snapshot diagnostic, PyFG export, objective parity, and asynchronous assurance |
+| `scripts/models/` | Provider-neutral online configuration contracts |
+| `scripts/{app,configuration,math,optimization,sim,reports,viz}/` | Reproducible standalone synthetic experiment pipeline |
+| `scripts/*_source.py`, `scripts/export_*.py`, `scripts/run_*.py` | ROS or CLI entry points only; reusable logic stays in the modules above |
+| `scripts/validation/` | Standalone deterministic validators; no runtime behavior |
+| `cmake/range_aid_devel_init.py.in` | Catkin devel-space namespace bridge for the flat source layout |
+
+The offline dense CVXPY experiment and the online snapshot diagnostic are not
+duplicates: the former reproduces a complete synthetic moving-target study,
+while the latter audits one immutable online pose/range snapshot. Neither may
+claim an official CORA certificate. Official CORA and SCORE remain external,
+pinned comparison tools.
+
 ## Runtime contract
 
 | Surface | Type | Meaning |

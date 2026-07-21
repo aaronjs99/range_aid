@@ -1,0 +1,10 @@
+"""Expose flat Range Aid sources beside catkin-generated ROS messages."""
+
+from pkgutil import extend_path
+
+__path__ = extend_path(__path__, __name__)
+_source_path = "@CMAKE_CURRENT_SOURCE_DIR@/scripts"
+if _source_path not in __path__:
+    __path__.insert(0, _source_path)
+del _source_path
+del extend_path

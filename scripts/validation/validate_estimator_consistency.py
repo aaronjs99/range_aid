@@ -9,12 +9,15 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import sys
 import tempfile
 import time
 from types import SimpleNamespace
 
 import gtsam
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from range_aid.archive import rebuild_full_batch
 from range_aid.archive.events import EventArchive, verify_archive
@@ -32,6 +35,7 @@ from range_aid.estimation.fixed_lag import (
 )
 from range_aid.estimation.rtabmap import convert_rtab_information, translate_link
 from range_aid.models.config import load_online_config
+from range_aid_archive import _write_json
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -423,6 +427,15 @@ def _solver_payload_pose(payload):
     )
 
 
+def _validate_json_writer():
+    with tempfile.TemporaryDirectory(prefix="range-aid-json-") as directory:
+        path = Path(directory) / "report.json"
+        _write_json(path, {"value": 1})
+        raw = path.read_bytes()
+        _assert(raw.endswith(b"\n") and b"\r" not in raw, "JSON must use LF")
+        _assert(json.loads(raw.decode("utf-8")) == {"value": 1}, "invalid JSON")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -438,6 +451,7 @@ def main() -> int:
     _validate_certifier(snapshot)
     _validate_cora_export(config)
     _validate_full_batch(config)
+    _validate_json_writer()
     report = {
         "status": "passed",
         "backend": "gtsam_unstable.IncrementalFixedLagSmoother",
@@ -456,6 +470,7 @@ def main() -> int:
             "content-addressed official-CORA PyFG export guardrails",
             "independent official-CORA objective convention evaluator",
             "archive-derived full-batch rebuild with delayed ranges",
+            "Python 3.8-compatible deterministic JSON output",
         ],
         "snapshot_sha256": hashlib.sha256(
             snapshot["snapshot_id"].encode("utf-8")

@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
+import sys
 import time
 
 import rospy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_srvs.srv import Trigger
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from range_aid.msg import CorrectionProposal, RangeAidStatus, RangeObservation
 

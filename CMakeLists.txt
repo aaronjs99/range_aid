@@ -12,13 +12,23 @@ find_package(catkin REQUIRED COMPONENTS
   tf2_ros
 )
 
-catkin_python_setup()
-
 add_message_files(
   FILES
     CorrectionProposal.msg
     RangeAidStatus.msg
     RangeObservation.msg
+)
+
+# Catkin's standard Python relay requires a nested source directory named after
+# the ROS package. Range Aid intentionally keeps a flat scripts/ tree, so this
+# small devel-space initializer extends the generated message package to that
+# source root instead.
+set(range_aid_CATKIN_PYTHON_SETUP_HAS_PACKAGE_INIT TRUE)
+file(MAKE_DIRECTORY "${CATKIN_DEVEL_PREFIX}/${PYTHON_INSTALL_DIR}/range_aid")
+configure_file(
+  cmake/range_aid_devel_init.py.in
+  "${CATKIN_DEVEL_PREFIX}/${PYTHON_INSTALL_DIR}/range_aid/__init__.py"
+  @ONLY
 )
 
 generate_messages(DEPENDENCIES geometry_msgs std_msgs)
@@ -39,4 +49,23 @@ catkin_install_python(PROGRAMS
 
 install(DIRECTORY config launch tools
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+)
+
+# Keep the source tree flat while still supporting a complete catkin install.
+# The bridge becomes the installed package initializer; reusable online modules
+# are copied below it. Repository-only synthetic experiment modules remain in
+# source and are driven by run.py.
+install(FILES scripts/range_aid.py
+  DESTINATION ${CATKIN_PACKAGE_PYTHON_DESTINATION}
+  RENAME __init__.py
+)
+
+install(DIRECTORY
+    scripts/archive
+    scripts/certification
+    scripts/estimation
+    scripts/models
+  DESTINATION ${CATKIN_PACKAGE_PYTHON_DESTINATION}
+  PATTERN "__pycache__" EXCLUDE
+  PATTERN "*.pyc" EXCLUDE
 )

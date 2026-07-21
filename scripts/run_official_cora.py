@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from range_aid.certification.pyfg_export import (
     OFFICIAL_CORA_COMMIT,
     OFFICIAL_CORA_REPOSITORY,

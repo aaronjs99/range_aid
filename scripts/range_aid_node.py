@@ -8,6 +8,7 @@ from dataclasses import asdict
 import hashlib
 import math
 from pathlib import Path
+import sys
 import threading
 import time
 
@@ -18,6 +19,8 @@ from nav_msgs.msg import Odometry
 from rtabmap_msgs.msg import MapData
 from std_srvs.srv import Trigger, TriggerResponse
 import tf2_ros
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from range_aid.archive import EventArchive
 from range_aid.certification import AsynchronousSnapshotCertifier
