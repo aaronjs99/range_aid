@@ -1,9 +1,17 @@
 std_msgs/Header header
 uint64 graph_epoch
+uint64 graph_revision
+string snapshot_id
 geometry_msgs/PoseWithCovariance pose
+string child_frame_id
 string source_odometry_topic
+string covariance_model
+bool covariance_calibrated
+string archive_id
+string archive_path
 string landmark_id
 uint32 range_measurement_count
+uint32 loop_closure_count
 uint8 translational_observability_rank
 float64 observability_condition
 float64 range_residual_rms_m

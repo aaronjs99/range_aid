@@ -2,8 +2,19 @@
 
 from range_aid.estimation.fixed_lag import (
     EstimateDiagnostics,
+    FactorAssociation,
+    FixedLagRangeSmoother,
+    LoopClosureMeasurement,
     RangeMeasurement,
-    RebuildingFixedLagSmoother,
 )
+from range_aid.estimation.rtabmap import convert_rtab_information, translate_link
 
-__all__ = ["EstimateDiagnostics", "RangeMeasurement", "RebuildingFixedLagSmoother"]
+__all__ = [
+    "EstimateDiagnostics",
+    "FactorAssociation",
+    "FixedLagRangeSmoother",
+    "LoopClosureMeasurement",
+    "RangeMeasurement",
+    "convert_rtab_information",
+    "translate_link",
+]

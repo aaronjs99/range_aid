@@ -12,8 +12,11 @@
 
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>rtabmap_msgs</depend>
   <depend>rospy</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>tf2_ros</depend>
   <depend>message_runtime</depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>

@@ -1,146 +1,135 @@
 # Range-Aided Pose Estimation
 
-`range_aid` is GRANDE's bounded, shadow-only research path for adding surveyed
-acoustic range constraints to LiDAR-inertial odometry. It publishes an
-inspectable alternate odometry stream and correction proposals, but it never
-publishes TF, replaces the active navigation state, or promotes itself into
-the controller.
+`range_aid` is GRANDE's standalone, shadow-only research back end for adding
+provider-neutral acoustic observations and independently accepted RTAB-Map
+closure links to local odometry. It publishes an inspectable map-frame estimate
+and correction proposals. It never publishes TF, replaces navigation state, or
+commands hardware.
 
-The package also retains the earlier offline target-localization experiments.
-The online path and offline experiments share the same sensor-frame geometry,
-but they answer different questions and must not be treated as interchangeable.
+The online graph and evidence archive have different jobs:
 
-## Runtime Contract
+- `gtsam_unstable.IncrementalFixedLagSmoother` bounds online latency and memory.
+- A hash-chained JSONL archive preserves raw observations, associations, resets,
+  closures, and immutable certification snapshots for delayed full-batch work.
 
-| Topic | Type | Meaning |
+Marginal covariance is explicitly labeled
+`local_linearized_robust_unvalidated`. Robust range factors reduce outlier
+influence, but do not undo fixed-lag marginalization or establish statistical
+consistency. Promotion requires held-out NEES/NIS and coverage evidence.
+
+## Runtime contract
+
+| Surface | Type | Meaning |
 | --- | --- | --- |
-| `/range_aid/observations` | `range_aid/RangeObservation` | Validated range to a named surveyed landmark, including source and synthetic provenance |
-| `/range_aid/odometry_shadow` | `nav_msgs/Odometry` | Alternate bounded estimate for comparison only |
-| `/range_aid/correction_proposal` | `range_aid/CorrectionProposal` | Gated, non-authoritative correction candidate |
-| `/range_aid/status` | `range_aid/RangeAidStatus` | Backend, coverage, residual, observability, certification, and gate state |
+| `/range_aid/observations` | `range_aid/RangeObservation` | Provider-neutral range/bearing observation with immutable identity, validity, uncertainty, provider provenance, and extrinsic revision |
+| `/range_aid/odometry_shadow` | `nav_msgs/Odometry` | Non-authoritative estimate in `map` |
+| `/range_aid/correction_proposal` | `range_aid/CorrectionProposal` | Snapshot-addressed candidate; always navigation-ineligible |
+| `/range_aid/status` | `range_aid/RangeAidStatus` | Epoch, revision, snapshot, archive, covariance, observability, and assurance state |
+| `/range_aid/reset` | `std_srvs/Trigger` | Clears only the active smoother, advances the epoch, preserves the archive, and invalidates pending diagnostics |
 
-The canonical names live in `config/runtime_surface.yaml`. GRANDE records these
-topics in runtime, raw, and SLAM profiles and exposes the status as a diagnostic
-domain. Range-aid availability does not gate mapping or water autonomy.
+`graph_epoch` changes only at a discontinuity such as an explicit reset, time
+rollback, source-frame change, or active-graph reconstruction.
+`graph_revision` advances for accepted graph mutations within an epoch.
 
-## Online Model
+## Frame and factor policy
 
-Let `X_k` be the map-frame boat pose, `T_BS` the fixed transform from boat to
-the acoustic sensor, and `L_j` a surveyed landmark. For a scalar observation
-`z_kj`, the factor residual is
+RTAB-Map owns `map -> odom` during shadow operation. At the beginning of each
+epoch, range_aid acquires `map <- odom` once and transforms raw local odometry
+poses into `map`. Subsequent local odometry enters once as relative
+`BetweenFactorPose3` constraints. Ordinary odometry is never repeated as
+absolute pose priors.
+
+Known landmarks are `Point3` variables with `PriorFactorPoint3`; scalar ranges
+use `RangeFactorWithTransform3D` and the configured body-to-ranging-sensor
+extrinsic. RTAB-Map link types 1 through 4 may enter as closures after full
+information-matrix validation. Neighbor, neighbor-merged, virtual, unknown,
+non-SPD, duplicate, and out-of-lag links are rejected. RTAB odometry edges are
+never imported.
+
+Raw observations are immutable. Corrections change the optimized keyframe pose,
+not the original sensor record. Every archive event carries sequence and hash
+chain information; accepted certification snapshots are stored in full.
+
+## Assurance boundaries
+
+The asynchronous dense CVXPY path is named `snapshot_sdp_diagnostic`. Its rank
+result is diagnostic only and cannot satisfy a formal CORA gate.
+
+`scripts/export_cora_snapshot.py` exports an immutable bounded snapshot to the
+official CORA PyFG format and writes a manifest containing the snapshot hash,
+PyFG hash, and required official CORA commit. The adapter deliberately blocks
+nonidentity sensor lever arms because the official `EDGE_RANGE` record has no
+lever-arm field. The currently configured extrinsic is an unmeasured nonzero
+placeholder, so official export remains blocked until a reviewed equivalent
+reparameterization and objective-parity test exist. It never silently drops the
+extrinsic.
+
+The official dependency is not vendored. The required audit pin is:
 
 ```text
-r_kj = || translation(X_k * T_BS) - L_j ||_2 - z_kj .
+repository: https://github.com/MarineRoboticsGroup/cora.git
+commit:     015dc43340ca3aed07226bee1727ea929536fd01
 ```
 
-Odometry supplies relative factors
+A tight official CORA result would certify only the exact exported mathematical
+instance. It would not validate sensors, covariances, outlier assumptions, or
+future graphs. A non-tight result is initialization/lower-bound evidence only.
+Any material GTSAM/CORA disagreement is a rejection and convention/model audit,
+not an automatic correction.
 
-```text
-Delta_k = inverse(X_(k-1)^odom) * X_k^odom
-r_odom,k = Log(inverse(Delta_k) * inverse(X_(k-1)) * X_k).
-```
+SCORE is wired as an external, pinned offline initialization baseline. The
+adapter requires the official SCORE repository at commit
+`41626b49702d27a8fca03982533ff52f6306278d` and PyFactorGraph at commit
+`87e18e9bab56b08dfe95e998c801226acba2439b`, then requests SCORE's SOCP
+relaxation on the same hashed PyFG/manifest pair. SCORE also requires
+`gurobipy` and a usable Gurobi license. Those dependencies are not vendored, and
+the adapter writes an explicit unavailable result instead of inventing a SCORE
+solution when they are absent. DCORA remains deferred until a genuine
+multi-robot graph and measured communication requirement exist.
 
-The active objective is a robust nonlinear least-squares problem:
+## Archive and export tools
 
-```text
-min_X  ||r_prior||^2 + sum_k ||r_odom,k||^2
-       + sum_(k,j) Huber(r_kj / sigma_kj).
-```
-
-Known landmarks are represented as tightly rotation-constrained `Pose3`
-variables because the installed GTSAM Python binding's native
-`RangeFactorWithTransformPose3` requires two `Pose3` keys. Only their
-translation affects the range residual.
-
-## Bounded Incremental Estimation
-
-IG Handle's GTSAM Python binding exposes iSAM2 but not either fixed-lag
-smoother class. `RebuildingFixedLagSmoother` therefore:
-
-1. updates iSAM2 incrementally while states remain inside the configured lag;
-2. retains at most `max_pose_count` states and `lag_sec` seconds of history;
-3. rebuilds the active graph when old states leave the lag;
-4. carries the prior estimate of the new boundary state with conservative
-   configured uncertainty.
-
-This keeps runtime and memory bounded. It is not exact Bayes-tree
-marginalization, and the status names the backend `bounded_rebuilding_isam2`
-so that limitation remains visible.
-
-## Gates And Certification
-
-Observations are rejected when their landmark is unknown, values are nonfinite
-or outside bounds, or timestamp association exceeds the configured tolerance.
-A correction candidate also requires minimum range coverage, translational
-observability rank, bounded condition number, low residual, and bounded pose
-correction.
-
-An asynchronous CVXPY semidefinite diagnostic independently solves each
-fixed-pose landmark snapshot and reports rank tightness and constraint
-residual. It is intentionally called `cora_landmark_snapshot_diagnostic`:
-it does not certify the full nonlinear pose graph. Certification runs outside
-the odometry callback so solver latency cannot block the state stream.
-
-Even when every gate passes:
-
-- `navigation_eligible` remains false;
-- no `map -> odom`, `odom -> base_link`, or sensor TF is published;
-- no surveyed real landmark is inferred from imaging-sonar packets;
-- no runtime correction is automatically approved.
-
-## Imaging Sonar Is Separate
-
-The Session 5 imaging sonar currently provides raw UDP datagrams on
-`/sensors/sonar/raw`. Its model-specific decoder has not been established.
-Those datagrams are not USBL ranges and cannot feed this estimator. A real
-range-aid deployment requires a compatible ranging source, a surveyed landmark
-position and uncertainty, and a physically measured sensor extrinsic.
-
-The simulation source publishes explicitly synthetic observations and marks
-them calibration-ineligible. Synthetic evidence validates contracts and
-estimator behavior, not real localization accuracy.
-
-## Running
-
-Build the package and GRANDE dependency closure:
+Generated archives, extracted snapshots, PyFG files, and solver outputs belong
+outside Git.
 
 ```bash
+rosrun range_aid range_aid_archive.py verify /path/to/session.jsonl
+rosrun range_aid range_aid_archive.py extract-snapshot \
+  /path/to/session.jsonl /tmp/snapshot.json --snapshot-id SHA256
+rosrun range_aid range_aid_archive.py rebuild-full-batch \
+  /path/to/session.jsonl config/online.yaml /tmp/full-batch.json --epoch 3
+rosrun range_aid export_cora_snapshot.py \
+  /tmp/snapshot.json /tmp/audit.pyfg
+rosrun range_aid run_score_baseline.py \
+  /tmp/audit.pyfg /tmp/audit.manifest.json /tmp/score.json \
+  --score-repo /opt/range-aid/score \
+  --pyfactorgraph-repo /opt/range-aid/PyFactorGraph
+```
+
+The export produces `/tmp/audit.pyfg` and `/tmp/audit.manifest.json`.
+
+## Validation
+
+```bash
+cd ~/catkin_ws/heron_ws/src/grande/range_aid
+PYTHONPATH=src python3 scripts/validation/validate_estimator_consistency.py
+
 cd ~/catkin_ws/heron_ws
 catkin build range_aid grande --no-status --summarize
 ```
 
-Run the canonical isolated simulator regression:
+The deterministic validator covers exact lag bounding, reset and rollback
+epochs, revision semantics, invalid observations, snapshot identity, covariance
+labeling, RTAB type/information filtering, archive tamper detection, stale
+diagnostic invalidation, and CORA-export guardrails. Integrated shadow replay is
+validated separately with `validate_shadow_runtime.py`.
 
-```bash
-cd ~/catkin_ws/heron_ws/src/grande
-python3 grande/run.py --session s5.0 run 0.4 --yes
-```
+## Remaining promotion evidence
 
-Direct launch remains available for diagnosis:
-
-```bash
-roslaunch grande bringup.launch \
-  mode:=sim use_range_aid:=true range_aid_mode:=shadow \
-  range_aid_synthetic_source:=true
-```
-
-## Configuration Ownership
-
-- `config/online.yaml` owns lag, noise, robust-loss, gate, certification,
-  extrinsic, and landmark values.
-- `config/runtime_surface.yaml` owns ROS topic names.
-- `launch/range_aid.launch` adapts those contracts to ROS.
-- `grande/launch/bringup.launch` owns optional lifecycle integration.
-- `grande/tests/s5.0/test_0_4.yaml` owns the integrated regression scenario.
-
-Do not place physical calibration in a session file. Replace the placeholder
-sensor transform and landmark only with measured values and preserve their
-source and uncertainty.
-
-## Remaining Real-World Evidence
-
-Before range corrections can be considered for navigation, collect a surveyed
-range dataset with synchronized 6-DoF odometry, exercise geometry that makes
-3D translation observable, evaluate held-out residuals and multi-step drift,
-verify timing and extrinsics, and compare against the unchanged odometry
-baseline. Promotion needs explicit review; new data alone is never approval.
+Navigation promotion is intentionally unavailable. Required work includes
+deterministic archived full-batch reconstruction, delayed-loop and reset replay,
+official CORA machine-readable result ingestion plus objective parity, a
+licensed SCORE baseline solve, covariance coverage/NEES/NIS calibration against
+independent ground truth, measured acoustic extrinsics, surveyed landmarks,
+multipath/NLOS tests, and field trials. GTSAM can own `map -> odom` only after
+those gates pass and RTAB-Map TF publication is disabled first.

@@ -4,10 +4,14 @@
   <arg name="runtime_surface_file" default="$(find range_aid)/config/runtime_surface.yaml"/>
   <arg name="config_eval" default="$(eval open(find('mariner') + '/launch/include/config_launch_eval.py').read())"/>
   <arg name="odometry_topic" default="/state/odometry_6dof"/>
+  <arg name="graph_frame" default="map"/>
   <arg name="observation_topic" default="$(eval eval(arg('config_eval'))(arg('runtime_surface_file'), 'topics.observations'))"/>
   <arg name="shadow_odometry_topic" default="$(eval eval(arg('config_eval'))(arg('runtime_surface_file'), 'topics.odometry_shadow'))"/>
   <arg name="correction_proposal_topic" default="$(eval eval(arg('config_eval'))(arg('runtime_surface_file'), 'topics.correction_proposal'))"/>
   <arg name="status_topic" default="$(eval eval(arg('config_eval'))(arg('runtime_surface_file'), 'topics.status'))"/>
+  <arg name="rtabmap_map_data_topic" default="/mapping/map_data/6dof"/>
+  <arg name="archive_directory" default=""/>
+  <arg name="raw_bag_uri" default=""/>
   <arg name="synthetic_source" default="false"/>
   <arg name="synthetic_truth_topic" default="/pose_gt"/>
   <arg name="synthetic_rate_hz" default="3.0"/>
@@ -19,10 +23,14 @@
     <param name="mode" value="$(arg mode)"/>
     <param name="config_file" value="$(arg config_file)"/>
     <param name="odometry_topic" value="$(arg odometry_topic)"/>
+    <param name="graph_frame" value="$(arg graph_frame)"/>
     <param name="observation_topic" value="$(arg observation_topic)"/>
     <param name="shadow_odometry_topic" value="$(arg shadow_odometry_topic)"/>
     <param name="correction_proposal_topic" value="$(arg correction_proposal_topic)"/>
     <param name="status_topic" value="$(arg status_topic)"/>
+    <param name="rtabmap_map_data_topic" value="$(arg rtabmap_map_data_topic)"/>
+    <param name="archive_directory" value="$(arg archive_directory)"/>
+    <param name="raw_bag_uri" value="$(arg raw_bag_uri)"/>
   </node>
 
   <node if="$(arg synthetic_source)"

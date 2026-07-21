@@ -1,9 +1,7 @@
-"""CORA-style SDP diagnostics for immutable known-landmark snapshots.
+"""Dense SDP rank diagnostic for immutable landmark snapshots.
 
-This certifies the tightness and feasibility of a fixed-pose landmark
-subproblem. It is deliberately not described as a certificate for the complete
-online GTSAM pose graph; that graph contains additional odometry and boundary
-priors with a different objective.
+This objective is intentionally narrower than the exported online factor graph.
+Rank tightness here is diagnostic only and is never a formal CORA certificate.
 """
 
 from __future__ import annotations
@@ -24,14 +22,14 @@ def _quadratic_distance_matrix(anchor: np.ndarray) -> np.ndarray:
     return matrix
 
 
-def certify_snapshot(
+def evaluate_snapshot_sdp(
     snapshot: Dict[str, object],
     *,
     solver: str = "SCS",
     rank_tolerance: float = 1e-3,
     feasibility_tolerance: float = 1e-3,
 ) -> Dict[str, object]:
-    """Solve one small lifted landmark problem per observed landmark."""
+    """Solve one lifted landmark diagnostic per sufficiently observed landmark."""
     observations = list(snapshot.get("observations", []) or [])
     landmarks = dict(snapshot.get("landmarks", {}) or {})
     by_landmark: Dict[str, List[dict]] = {}
@@ -41,7 +39,8 @@ def certify_snapshot(
     for landmark_id, group in sorted(by_landmark.items()):
         if landmark_id not in landmarks or len(group) < 4:
             continue
-        known = np.asarray(landmarks[landmark_id], dtype=float)
+        landmark_entry = landmarks[landmark_id]
+        known = np.asarray(landmark_entry["position_m"], dtype=float)
         z = cp.Variable((4, 4), symmetric=True)
         slack_plus = cp.Variable(len(group), nonneg=True)
         slack_minus = cp.Variable(len(group), nonneg=True)
@@ -59,8 +58,10 @@ def certify_snapshot(
             matrices.append((q, measured_squared))
             terms.append(slack_plus[index] + slack_minus[index])
         prior_q = _quadratic_distance_matrix(known)
-        objective = cp.Minimize(cp.trace(prior_q @ z) + cp.sum(cp.hstack(terms)))
-        problem = cp.Problem(objective, constraints)
+        problem = cp.Problem(
+            cp.Minimize(cp.trace(prior_q @ z) + cp.sum(cp.hstack(terms))),
+            constraints,
+        )
         try:
             problem.solve(solver=solver, verbose=False)
         except Exception as exc:
@@ -68,7 +69,7 @@ def certify_snapshot(
                 {
                     "landmark_id": landmark_id,
                     "status": "error:{}".format(type(exc).__name__),
-                    "tight": False,
+                    "diagnostic_rank_tight": False,
                     "reasons": ["solver_error"],
                 }
             )
@@ -78,7 +79,7 @@ def certify_snapshot(
                 {
                     "landmark_id": landmark_id,
                     "status": str(problem.status),
-                    "tight": False,
+                    "diagnostic_rank_tight": False,
                     "reasons": ["no_sdp_solution"],
                 }
             )
@@ -111,7 +112,7 @@ def certify_snapshot(
             {
                 "landmark_id": landmark_id,
                 "status": str(problem.status),
-                "tight": not reasons,
+                "diagnostic_rank_tight": not reasons,
                 "reasons": reasons,
                 "measurement_count": len(group),
                 "rank_ratio": rank_ratio,
@@ -121,38 +122,21 @@ def certify_snapshot(
         )
     reasons = []
     if not reports:
-        reasons.append("no_certifiable_landmark_window")
+        reasons.append("no_diagnostic_landmark_window")
     for report in reports:
         reasons.extend(
             "{}:{}".format(report["landmark_id"], reason)
             for reason in report.get("reasons", [])
         )
+    diagnostic_rank_tight = bool(reports) and all(
+        bool(report.get("diagnostic_rank_tight")) for report in reports
+    )
     return {
-        "epoch": int(snapshot.get("epoch", 0)),
-        "backend": "cora_landmark_snapshot_diagnostic",
-        "tight": bool(reports) and all(bool(report.get("tight")) for report in reports),
+        **snapshot,
+        "backend": "snapshot_sdp_diagnostic",
+        "diagnostic_rank_tight": diagnostic_rank_tight,
         "formal_full_graph_certificate": False,
+        "formal_certificate_tight": False,
         "reasons": reasons,
-        "landmarks": reports,
-        "latest_pose_position_m": list(
-            snapshot.get("latest_pose_position_m", []) or []
-        ),
-        "latest_pose_quaternion_wxyz": list(
-            snapshot.get("latest_pose_quaternion_wxyz", []) or []
-        ),
-        "latest_stamp_sec": float(snapshot.get("latest_stamp_sec", 0.0)),
-        "latest_pose_covariance": list(
-            snapshot.get("latest_pose_covariance", []) or []
-        ),
-        "range_count": int(snapshot.get("range_count", 0)),
-        "translational_rank": int(snapshot.get("translational_rank", 0)),
-        "observability_condition": float(
-            snapshot.get("observability_condition", math.inf)
-        ),
-        "residual_rms_m": float(snapshot.get("residual_rms_m", math.inf)),
-        "candidate_gate_passed": bool(
-            snapshot.get("candidate_gate_passed", False)
-        ),
-        "gate_reasons": list(snapshot.get("gate_reasons", []) or []),
-        "synthetic_evidence": bool(snapshot.get("synthetic_evidence", False)),
+        "landmark_diagnostics": reports,
     }

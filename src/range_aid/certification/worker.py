@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import copy
 import queue
 import threading
 import time
 from typing import Dict, Optional, Tuple
 
-from range_aid.certification.cora_snapshot import certify_snapshot
+from range_aid.certification.snapshot_sdp_diagnostic import evaluate_snapshot_sdp
 
 
 @dataclass(frozen=True)
@@ -16,8 +17,11 @@ class CertificationResult:
     """Latest completed snapshot diagnostic."""
 
     epoch: int
+    revision: int
+    snapshot_id: str
     backend: str
-    tight: bool
+    diagnostic_rank_tight: bool
+    formal_certificate_tight: bool
     formal_full_graph_certificate: bool
     reasons: Tuple[str, ...]
     completed_monotonic: float
@@ -34,6 +38,7 @@ class AsynchronousSnapshotCertifier:
         self._lock = threading.Lock()
         self._latest: Optional[CertificationResult] = None
         self._pending = False
+        self._generation = 0
         self._stopped = threading.Event()
         self._thread = threading.Thread(target=self._run, name="range-aid-certifier")
         self._thread.daemon = True
@@ -46,9 +51,22 @@ class AsynchronousSnapshotCertifier:
                 self._queue.get_nowait()
             except queue.Empty:
                 break
-        self._queue.put_nowait(dict(snapshot))
         with self._lock:
+            generation = self._generation
             self._pending = True
+        self._queue.put_nowait((generation, copy.deepcopy(snapshot)))
+
+    def invalidate(self) -> None:
+        """Invalidate queued, in-flight, and completed results after an epoch reset."""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        with self._lock:
+            self._generation += 1
+            self._latest = None
+            self._pending = False
 
     def latest(self) -> Tuple[Optional[CertificationResult], bool]:
         """Return the latest result and whether newer work is pending."""
@@ -62,15 +80,20 @@ class AsynchronousSnapshotCertifier:
     def _run(self) -> None:
         while not self._stopped.is_set():
             try:
-                snapshot = self._queue.get(timeout=0.2)
+                generation, snapshot = self._queue.get(timeout=0.2)
             except queue.Empty:
                 continue
             started = time.perf_counter()
-            details = certify_snapshot(snapshot, solver=self.solver)
+            details = evaluate_snapshot_sdp(snapshot, solver=self.solver)
             result = CertificationResult(
                 epoch=int(details.get("epoch", 0)),
+                revision=int(details.get("revision", 0)),
+                snapshot_id=str(details.get("snapshot_id", "")),
                 backend=str(details.get("backend", "unknown")),
-                tight=bool(details.get("tight", False)),
+                diagnostic_rank_tight=bool(details.get("diagnostic_rank_tight", False)),
+                formal_certificate_tight=bool(
+                    details.get("formal_certificate_tight", False)
+                ),
                 formal_full_graph_certificate=bool(
                     details.get("formal_full_graph_certificate", False)
                 ),
@@ -80,5 +103,6 @@ class AsynchronousSnapshotCertifier:
                 details=details,
             )
             with self._lock:
-                self._latest = result
-                self._pending = not self._queue.empty()
+                if generation == self._generation:
+                    self._latest = result
+                    self._pending = not self._queue.empty()
