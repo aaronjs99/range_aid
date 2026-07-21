@@ -248,12 +248,11 @@ def export_snapshot(
         raise PyfgExportError("destination must use the .pyfg suffix")
     destination.parent.mkdir(parents=True, exist_ok=True)
     pyfg_text, manifest = render_pyfg(snapshot)
-    destination.write_text(pyfg_text, encoding="utf-8", newline="\n")
+    destination.write_text(pyfg_text, encoding="utf-8")
     manifest_path = destination.with_suffix(".manifest.json")
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
-        newline="\n",
     )
     return {
         **manifest,

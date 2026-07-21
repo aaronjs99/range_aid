@@ -19,7 +19,12 @@ import numpy as np
 from range_aid.archive import rebuild_full_batch
 from range_aid.archive.events import EventArchive, verify_archive
 from range_aid.certification.worker import AsynchronousSnapshotCertifier
-from range_aid.certification.pyfg_export import PyfgExportError, render_pyfg
+from range_aid.certification.objective_parity import evaluate_objective_parity
+from range_aid.certification.pyfg_export import (
+    PyfgExportError,
+    export_snapshot,
+    render_pyfg,
+)
 from range_aid.estimation.fixed_lag import (
     FixedLagRangeSmoother,
     RangeMeasurement,
@@ -235,6 +240,82 @@ def _validate_cora_export(config):
     _assert(pyfg_text.startswith("VERTEX_SE3:QUAT "), "PyFG pose header missing")
     _assert(pyfg_text.count("EDGE_RANGE ") == 8, "PyFG range count mismatch")
     _assert(manifest["formal_certificate_claimed"] is False, "export overclaimed")
+    with tempfile.TemporaryDirectory(prefix="range-aid-pyfg-") as directory:
+        destination = Path(directory) / "audit.pyfg"
+        report = export_snapshot(snapshot, destination)
+        _assert(
+            destination.read_text(encoding="utf-8") == pyfg_text,
+            "PyFG write changed content",
+        )
+        manifest_path = Path(report["manifest_path"])
+        _assert(manifest_path.is_file(), "PyFG manifest was not written")
+        _assert(
+            json.loads(manifest_path.read_text(encoding="utf-8"))["pyfg_sha256"]
+            == manifest["pyfg_sha256"],
+            "written PyFG manifest changed the content hash",
+        )
+    official_poses = {"O0": _solver_pose(_pose(0.0))}
+    for index, entry in enumerate(snapshot["poses"]):
+        official_poses["A{}".format(index)] = _solver_pose(
+            _pose_payload(entry["estimate"])
+        )
+    official_landmarks = {
+        "L{}".format(index): {"translation": list(entry[1]["position_m"])}
+        for index, entry in enumerate(sorted(snapshot["landmarks"].items()))
+    }
+    parity = evaluate_objective_parity(
+        snapshot,
+        {
+            "objective": 0.0,
+            "poses": official_poses,
+            "landmarks": official_landmarks,
+        },
+    )
+    _assert(parity["passed"], "independent CORA objective evaluator drifted")
+    gauge = gtsam.Pose3(gtsam.Rot3.RzRyRx(0.0, 0.0, 0.35), np.asarray([4.0, -2.0, 1.0]))
+    gauged_poses = {
+        name: _solver_pose(gauge.compose(_solver_payload_pose(payload)))
+        for name, payload in official_poses.items()
+    }
+    gauged_landmarks = {
+        name: {
+            "translation": (
+                gauge.rotation().rotate(np.asarray(payload["translation"]))
+                + gauge.translation()
+            ).tolist()
+        }
+        for name, payload in official_landmarks.items()
+    }
+    gauge_parity = evaluate_objective_parity(
+        snapshot,
+        {
+            "objective": 0.0,
+            "poses": gauged_poses,
+            "landmarks": gauged_landmarks,
+        },
+    )
+    _assert(gauge_parity["passed"], "origin-relative objective lost gauge invariance")
+    perturbed_poses = json.loads(json.dumps(official_poses))
+    perturbed = _solver_payload_pose(perturbed_poses["A3"])
+    perturbed_poses["A3"] = _solver_pose(
+        gtsam.Pose3(
+            perturbed.rotation().compose(gtsam.Rot3.RzRyRx(0.0, 0.0, 0.12)),
+            perturbed.translation(),
+        )
+    )
+    rotation_probe = evaluate_objective_parity(
+        snapshot,
+        {
+            "objective": 0.0,
+            "poses": perturbed_poses,
+            "landmarks": official_landmarks,
+        },
+    )
+    _assert(
+        rotation_probe["official_components"]["pose_rotation"] > 0.0,
+        "chordal rotation residual was not evaluated",
+    )
+    _assert(not rotation_probe["passed"], "objective mismatch was not rejected")
     tampered = dict(snapshot)
     tampered["revision"] += 1
     try:
@@ -322,6 +403,26 @@ def _with_nonidentity_extrinsic(snapshot):
     return changed
 
 
+def _pose_payload(payload):
+    return pose3_from_components(
+        tuple(payload["position_m"]), tuple(payload["quaternion_wxyz"])
+    )
+
+
+def _solver_pose(pose):
+    return {
+        "translation": np.asarray(pose.translation(), dtype=float).tolist(),
+        "rotation": np.asarray(pose.rotation().matrix(), dtype=float).tolist(),
+    }
+
+
+def _solver_payload_pose(payload):
+    return gtsam.Pose3(
+        gtsam.Rot3(np.asarray(payload["rotation"], dtype=float)),
+        np.asarray(payload["translation"], dtype=float),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -353,6 +454,7 @@ def main() -> int:
             "stale diagnostic invalidation",
             "dense diagnostic cannot claim formal CORA certification",
             "content-addressed official-CORA PyFG export guardrails",
+            "independent official-CORA objective convention evaluator",
             "archive-derived full-batch rebuild with delayed ranges",
         ],
         "snapshot_sha256": hashlib.sha256(

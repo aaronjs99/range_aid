@@ -64,6 +64,17 @@ placeholder, so official export remains blocked until a reviewed equivalent
 reparameterization and objective-parity test exist. It never silently drops the
 extrinsic.
 
+`scripts/run_official_cora.py` verifies the official repository pin and clean
+state, compiles the versioned machine-readable adapter against an external CORA
+build, and runs a deterministic seeded solve. The adapter reports CORA's raw
+state including its origin pose, objective, post-solve official-library
+certificate check, and solver metadata. A separate Python evaluator recomputes
+CORA's half-weighted chordal/scalar-precision objective and scores the GTSAM
+state with that same convention. `official_certificate` and
+`formal_gate_passed` remain separate: the latter also requires objective parity
+and configured GTSAM/CORA state agreement. A certified disagreement is rejected
+and never injected into the online estimator.
+
 The official dependency is not vendored. The required audit pin is:
 
 ```text
@@ -87,6 +98,38 @@ the adapter writes an explicit unavailable result instead of inventing a SCORE
 solution when they are absent. DCORA remains deferred until a genuine
 multi-robot graph and measured communication requirement exist.
 
+The pinned external dependencies can be installed outside Git under
+`~/.local/share/range_aid`:
+
+```bash
+mkdir -p ~/.local/share/range_aid/deps ~/.local/share/range_aid/build
+
+git clone https://github.com/MarineRoboticsGroup/cora.git \
+  ~/.local/share/range_aid/deps/cora
+git -C ~/.local/share/range_aid/deps/cora checkout --detach \
+  015dc43340ca3aed07226bee1727ea929536fd01
+git -C ~/.local/share/range_aid/deps/cora submodule update --init --recursive
+cmake -S ~/.local/share/range_aid/deps/cora \
+  -B ~/.local/share/range_aid/build/cora-015dc433 \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
+  -DPERFORM_EXPERIMENTS=OFF -DENABLE_VISUALIZATION=OFF
+cmake --build ~/.local/share/range_aid/build/cora-015dc433 \
+  --target cora_example -j2
+
+git clone https://github.com/MarineRoboticsGroup/score.git \
+  ~/.local/share/range_aid/deps/score
+git -C ~/.local/share/range_aid/deps/score checkout --detach \
+  41626b49702d27a8fca03982533ff52f6306278d
+git clone https://github.com/MarineRoboticsGroup/PyFactorGraph.git \
+  ~/.local/share/range_aid/deps/PyFactorGraph
+git -C ~/.local/share/range_aid/deps/PyFactorGraph checkout --detach \
+  87e18e9bab56b08dfe95e998c801226acba2439b
+```
+
+SCORE additionally requires `gurobipy`, a valid Gurobi license, `attrs`, and
+PyFactorGraph's runtime dependencies. On a headless host, configure the external
+EVO dependency to use the `Agg` plotting backend.
+
 ## Archive and export tools
 
 Generated archives, extracted snapshots, PyFG files, and solver outputs belong
@@ -100,10 +143,15 @@ rosrun range_aid range_aid_archive.py rebuild-full-batch \
   /path/to/session.jsonl config/online.yaml /tmp/full-batch.json --epoch 3
 rosrun range_aid export_cora_snapshot.py \
   /tmp/snapshot.json /tmp/audit.pyfg
+rosrun range_aid run_official_cora.py \
+  /tmp/snapshot.json /tmp/audit.pyfg /tmp/audit.manifest.json \
+  /tmp/cora.json \
+  --cora-repo ~/.local/share/range_aid/deps/cora \
+  --cora-build ~/.local/share/range_aid/build/cora-015dc433
 rosrun range_aid run_score_baseline.py \
   /tmp/audit.pyfg /tmp/audit.manifest.json /tmp/score.json \
-  --score-repo /opt/range-aid/score \
-  --pyfactorgraph-repo /opt/range-aid/PyFactorGraph
+  --score-repo ~/.local/share/range_aid/deps/score \
+  --pyfactorgraph-repo ~/.local/share/range_aid/deps/PyFactorGraph
 ```
 
 The export produces `/tmp/audit.pyfg` and `/tmp/audit.manifest.json`.
@@ -112,7 +160,7 @@ The export produces `/tmp/audit.pyfg` and `/tmp/audit.manifest.json`.
 
 ```bash
 cd ~/catkin_ws/heron_ws/src/grande/range_aid
-PYTHONPATH=src python3 scripts/validation/validate_estimator_consistency.py
+PYTHONPATH=scripts python3 scripts/validation/validate_estimator_consistency.py
 
 cd ~/catkin_ws/heron_ws
 catkin build range_aid grande --no-status --summarize
@@ -128,8 +176,9 @@ validated separately with `validate_shadow_runtime.py`.
 
 Navigation promotion is intentionally unavailable. Required work includes
 deterministic archived full-batch reconstruction, delayed-loop and reset replay,
-official CORA machine-readable result ingestion plus objective parity, a
-licensed SCORE baseline solve, covariance coverage/NEES/NIS calibration against
-independent ground truth, measured acoustic extrinsics, surveyed landmarks,
-multipath/NLOS tests, and field trials. GTSAM can own `map -> odom` only after
-those gates pass and RTAB-Map TF publication is disabled first.
+covariance coverage/NEES/NIS calibration against independent ground truth,
+measured acoustic extrinsics, surveyed landmarks, multipath/NLOS tests, and
+field trials. Official CORA ingestion, objective parity, disagreement handling,
+and a licensed SCORE smoke solve now work on identity-extrinsic fixtures; they
+are not physical validation. GTSAM can own `map -> odom` only after the remaining
+gates pass and RTAB-Map TF publication is disabled first.

@@ -2,7 +2,7 @@
   <arg name="mode" default="shadow"/>
   <arg name="config_file" default="$(find range_aid)/config/online.yaml"/>
   <arg name="runtime_surface_file" default="$(find range_aid)/config/runtime_surface.yaml"/>
-  <arg name="config_eval" default="$(eval open(find('mariner') + '/launch/include/config_launch_eval.py').read())"/>
+  <arg name="config_eval" default="$(eval open(find('range_aid') + '/launch/include/config_launch_eval.py').read())"/>
   <arg name="odometry_topic" default="/state/odometry_6dof"/>
   <arg name="graph_frame" default="map"/>
   <arg name="observation_topic" default="$(eval eval(arg('config_eval'))(arg('runtime_surface_file'), 'topics.observations'))"/>

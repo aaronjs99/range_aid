@@ -14,6 +14,6 @@ setup(
             "range_aid.estimation",
             "range_aid.models",
         ],
-        package_dir={"": "src"},
+        package_dir={"": "scripts"},
     )
 )
