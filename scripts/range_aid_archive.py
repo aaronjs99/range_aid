@@ -10,16 +10,13 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from range_aid.archive import read_archive_records, rebuild_full_batch, verify_archive
+from range_aid.archive import (
+    atomic_json_write,
+    read_archive_records,
+    rebuild_full_batch,
+    verify_archive,
+)
 from range_aid.models import load_online_config
-
-
-def _write_json(path: Path, payload) -> None:
-    """Write deterministic LF-delimited JSON on every supported Python 3."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
-        handle.write("\n")
 
 
 def _extract_snapshot(archive_path: Path, snapshot_id: str, output: Path) -> dict:
@@ -39,7 +36,7 @@ def _extract_snapshot(archive_path: Path, snapshot_id: str, output: Path) -> dic
     if not snapshot_id and len(matches) != 1:
         raise ValueError("archive has multiple snapshots; provide --snapshot-id")
     line_number, snapshot = matches[-1]
-    _write_json(output, snapshot)
+    atomic_json_write(output, snapshot)
     return {
         "archive_path": str(archive_path),
         "archive_line": line_number,
@@ -78,7 +75,7 @@ def main() -> int:
             load_online_config(args.config),
             epoch=args.epoch,
         )
-        _write_json(args.output, report)
+        atomic_json_write(args.output, report)
         print(
             json.dumps(
                 {

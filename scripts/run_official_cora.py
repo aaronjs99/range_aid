@@ -19,59 +19,8 @@ from range_aid.certification.pyfg_export import (
     OFFICIAL_CORA_REPOSITORY,
 )
 from range_aid.certification.objective_parity import evaluate_objective_parity
-
-
-def _git_value(repository: Path, *args: str) -> str:
-    return subprocess.check_output(
-        ["git", "-C", str(repository), *args], text=True
-    ).strip()
-
-
-def _normalize_git_url(value: str) -> str:
-    value = value.rstrip("/")
-    return value[:-4] if value.endswith(".git") else value
-
-
-def _verify_repository(path: Path) -> None:
-    if _git_value(path, "rev-parse", "HEAD") != OFFICIAL_CORA_COMMIT:
-        raise ValueError("official CORA repository commit does not match the pin")
-    remote = _git_value(path, "remote", "get-url", "origin")
-    if _normalize_git_url(remote) != _normalize_git_url(OFFICIAL_CORA_REPOSITORY):
-        raise ValueError("official CORA repository origin does not match")
-    if _git_value(path, "status", "--porcelain"):
-        raise ValueError("official CORA repository or its submodules are dirty")
-
-
-def _validate_finite_tree(value, path: str = "result") -> None:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            _validate_finite_tree(item, "{}.{}".format(path, key))
-    elif isinstance(value, list):
-        for index, item in enumerate(value):
-            _validate_finite_tree(item, "{}[{}]".format(path, index))
-    elif isinstance(value, float) and not math.isfinite(value):
-        raise ValueError("{} is non-finite".format(path))
-
-
-def _atomic_json_write(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=str(path.parent),
-            prefix=".{}-".format(path.name),
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
-            handle.write("\n")
-            temporary = Path(handle.name)
-        temporary.replace(path)
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+from range_aid.archive import atomic_json_write
+from range_aid.certification import validate_finite_tree, verify_pinned_repository
 
 
 def _compile_adapter(source: Path, repository: Path, build: Path) -> Path:
@@ -131,7 +80,7 @@ def _load_inputs(pyfg: Path, manifest_path: Path) -> dict:
 
 
 def _validate_result(result: dict, manifest: dict, seed: int) -> None:
-    _validate_finite_tree(result)
+    validate_finite_tree(result)
     if result.get("backend") != "official_cora" or not result.get("solved"):
         raise ValueError("official CORA did not return a solved result")
     for key in (
@@ -188,7 +137,9 @@ def main() -> int:
     if args.state_objective_relative_tolerance < 0.0:
         raise ValueError("state objective relative tolerance must be nonnegative")
 
-    _verify_repository(args.cora_repo)
+    verify_pinned_repository(
+        args.cora_repo, OFFICIAL_CORA_REPOSITORY, OFFICIAL_CORA_COMMIT
+    )
     manifest = _load_inputs(args.pyfg, args.manifest)
     snapshot = json.loads(args.snapshot.read_text(encoding="utf-8"))
     if str(snapshot.get("snapshot_id", "")) != str(manifest["snapshot_id"]):
@@ -253,7 +204,7 @@ def main() -> int:
         report["rejection_reason"] = "official_cora_objective_parity_failed"
     elif not state_agreement["passed"]:
         report["rejection_reason"] = "certified_solution_disagrees_with_gtsam"
-    _atomic_json_write(args.output, report)
+    atomic_json_write(args.output, report)
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     return 0
 

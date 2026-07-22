@@ -45,6 +45,12 @@ flat source root, so downstream packages can import both `range_aid.msg` and
 | `scripts/validation/` | Standalone deterministic validators; no runtime behavior |
 | `cmake/range_aid_devel_init.py.in` | Catkin devel-space namespace bridge for the flat source layout |
 
+All archive and solver-result JSON uses one atomic writer in
+`scripts/archive/io.py`. Official CORA, SCORE, and PyFactorGraph dependency
+checks use one pin/origin/cleanliness guard in
+`scripts/certification/external.py`; CLI entry points contain only their
+solver-specific translation and policy.
+
 The offline dense CVXPY experiment and the online snapshot diagnostic are not
 duplicates: the former reproduces a complete synthetic moving-target study,
 while the latter audits one immutable online pose/range snapshot. Neither may

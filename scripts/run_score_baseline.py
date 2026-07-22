@@ -7,10 +7,14 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from range_aid.archive import atomic_json_write
+from range_aid.certification import verify_pinned_repository
 
 OFFICIAL_SCORE_REPOSITORY = "https://github.com/MarineRoboticsGroup/score.git"
 OFFICIAL_SCORE_COMMIT = "41626b49702d27a8fca03982533ff52f6306278d"
@@ -18,25 +22,6 @@ OFFICIAL_PYFACTORGRAPH_REPOSITORY = (
     "https://github.com/MarineRoboticsGroup/PyFactorGraph.git"
 )
 OFFICIAL_PYFACTORGRAPH_COMMIT = "87e18e9bab56b08dfe95e998c801226acba2439b"
-
-
-def _git_value(repository: Path, *args: str) -> str:
-    return subprocess.check_output(
-        ["git", "-C", str(repository), *args], text=True
-    ).strip()
-
-
-def _normalize_git_url(value: str) -> str:
-    value = value.rstrip("/")
-    return value[:-4] if value.endswith(".git") else value
-
-
-def _verify_repository(path: Path, expected_url: str, expected_commit: str) -> None:
-    if _git_value(path, "rev-parse", "HEAD") != expected_commit:
-        raise ValueError("repository commit does not match the required pin")
-    remote = _git_value(path, "remote", "get-url", "origin")
-    if _normalize_git_url(remote) != _normalize_git_url(expected_url):
-        raise ValueError("repository origin does not match the official source")
 
 
 def _array_rows(values):
@@ -54,10 +39,10 @@ def main() -> int:
     parser.add_argument("--pyfactorgraph-repo", type=Path, required=True)
     parser.add_argument("--check-only", action="store_true")
     args = parser.parse_args()
-    _verify_repository(
+    verify_pinned_repository(
         args.score_repo, OFFICIAL_SCORE_REPOSITORY, OFFICIAL_SCORE_COMMIT
     )
-    _verify_repository(
+    verify_pinned_repository(
         args.pyfactorgraph_repo,
         OFFICIAL_PYFACTORGRAPH_REPOSITORY,
         OFFICIAL_PYFACTORGRAPH_COMMIT,
@@ -92,10 +77,7 @@ def main() -> int:
                 "reason": "missing_external_dependency:{}".format(exc.name),
             }
         )
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        atomic_json_write(args.output, report)
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if args.check_only else 2
     report["available"] = True
@@ -117,10 +99,7 @@ def main() -> int:
                 "landmarks": _array_rows(result.landmarks),
             }
         )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    atomic_json_write(args.output, report)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
