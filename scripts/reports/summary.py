@@ -110,7 +110,7 @@ def write_summary(path: Path, data) -> None:
         if np.any(consistency_mask)
         else float("nan")
     )
-    if cfg.optimizer_backend == "cora":
+    if cfg.optimizer_backend == "snapshot_sdp_diagnostic":
         smoothness_rms = float("nan")
     else:
         smoothness_rms = float(
@@ -293,7 +293,7 @@ def write_summary(path: Path, data) -> None:
             )
         )
     cora_lines = []
-    if cfg.optimizer_backend == "cora":
+    if cfg.optimizer_backend == "snapshot_sdp_diagnostic":
         setup_lines = [
             "- Active model: event-triggered CORA-style stationary-ping SDP.",
             "- The scalar range factor is used in the SDP relaxation.",
@@ -309,15 +309,15 @@ def write_summary(path: Path, data) -> None:
         ]
     target_line = (
         "- Object B moves before/after the ping and is assumed stationary only inside CORA ping windows."
-        if cfg.optimizer_backend == "cora"
+        if cfg.optimizer_backend == "snapshot_sdp_diagnostic"
         else "- Object B is a moving underwater target carrying an acoustic transponder."
     )
     estimate_line = (
         "- CORA estimates one stationary event landmark per solved ping and archives it after the event."
-        if cfg.optimizer_backend == "cora"
+        if cfg.optimizer_backend == "snapshot_sdp_diagnostic"
         else "- The optimizer estimates B_i position per timestamp with the active factor set."
     )
-    if cfg.optimizer_backend == "cora":
+    if cfg.optimizer_backend == "snapshot_sdp_diagnostic":
         finite_rank_ratios = cora_rank_ratios[np.isfinite(cora_rank_ratios)]
         finite_slacks = cora_slack_sums[np.isfinite(cora_slack_sums)]
         finite_objectives = cora_sdp_objectives[np.isfinite(cora_sdp_objectives)]
@@ -352,7 +352,7 @@ def write_summary(path: Path, data) -> None:
             f"- cora_refine_with_full: {cfg.cora_refine_with_full}",
             f"- stationary_ping_windows: {cfg.stationary_ping_windows}",
             f"- num_events: {num_events}",
-            f"- USBL samples fed to CORA: {int(np.sum(cora_feed_mask))}",
+            f"- USBL samples fed to dense snapshot SDP: {int(np.sum(cora_feed_mask))}",
             f"- USBL inactive outside ping/update: {int(len(cora_feed_mask) - np.sum(cora_feed_mask))}",
             f"- USBL out-of-range samples dropped: {int(np.sum(data.get('usbl_out_of_range_mask', [])))}",
             f"- USBL out-of-coverage samples dropped: {int(np.sum(data.get('usbl_out_of_coverage_mask', [])))}",
@@ -396,7 +396,7 @@ def write_summary(path: Path, data) -> None:
             "- certificate note: certified_tight requires both SDP validity and rank tightness; this is still not a full Riemannian Staircase certificate.",
         ]
 
-    if cfg.optimizer_backend == "cora":
+    if cfg.optimizer_backend == "snapshot_sdp_diagnostic":
         optimizer_lines = [
             f"pipeline_success: {cora_pipeline_success}",
             f"sdp_diagnostic_success: {cora_sdp_diagnostic_success}",
@@ -432,7 +432,8 @@ def write_summary(path: Path, data) -> None:
                 "- The range residual at time i is ||q_i|| - measured_range_i.",
                 "- q_i = R_S_i.T @ (B_i - p_S_i), where S_i = A_i * T_A_S.",
                 f"- smoothness factor enabled: {cfg.use_smoothness_factor}",
-                f"- smoothness ignored by CORA: {cfg.optimizer_backend == 'cora'}",
+                "- smoothness ignored by dense snapshot SDP: "
+                f"{cfg.optimizer_backend == 'snapshot_sdp_diagnostic'}",
                 f"- depth factor enabled: {cfg.use_depth_factor}",
                 f"- USBL angle factors enabled: {cfg.use_usbl_angles}",
                 f"- optimizer backend: {cfg.optimizer_backend}",

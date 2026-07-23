@@ -222,3 +222,15 @@ field trials. Official CORA ingestion, objective parity, disagreement handling,
 and a licensed SCORE smoke solve now work on identity-extrinsic fixtures; they
 are not physical validation. GTSAM can own `map -> odom` only after the remaining
 gates pass and RTAB-Map TF publication is disabled first.
+
+## File Structure
+
+| File | Relevance | Dependencies | Used by |
+| --- | --- | --- | --- |
+| .gitattributes | Defines repository text and binary path handling. | Git | Repository contributors |
+| .gitignore | Excludes generated Range Aid build and runtime artifacts. | Git | Repository contributors |
+| CMakeLists.txt | Declares the Range Aid catkin build, messages, services, and installed scripts. | catkin, ROS Noetic | catkin build |
+| LICENSE | Defines Range Aid's license terms. | None | Repository users |
+| package.xml | Declares Range Aid's ROS package metadata and dependencies. | ROS Noetic | catkin and rosdep |
+| requirements.txt | Declares standalone Python dependencies for Range Aid tooling. | pip | Developers and CI |
+| run.py | Provides the guarded standalone Range Aid command interface. | scripts and launch configuration | Range Aid operators |

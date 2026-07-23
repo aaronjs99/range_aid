@@ -4,9 +4,10 @@ simulation:
   seed: 7
 
 estimator:
-  optimizer_backend: "cora"
+  optimizer_backend: "snapshot_sdp_diagnostic"
   # "full" estimates a moving target trajectory with smoothness and optional
-  # USBL angles. "cora" solves stationary ping windows with a dense lifted SDP.
+  # USBL angles. "snapshot_sdp_diagnostic" solves stationary ping windows with
+  # a dense lifted SDP and never claims official CORA certification.
   # This is only the optimizer start point direction/offset before using all
   # factors. It is not a B odometry/dead-reckoning measurement.
   initial_guess_offset_m: [6.0, -4.0, -2.0]

@@ -11,11 +11,11 @@ def simulate_and_estimate(cfg: SimConfig) -> dict:
         from scripts.optimization import full
 
         return full.simulate_and_estimate(cfg)
-    if cfg.optimizer_backend == "cora":
-        from scripts.optimization import cora
+    if cfg.optimizer_backend == "snapshot_sdp_diagnostic":
+        from scripts.optimization import snapshot_sdp_diagnostic
 
-        return cora.simulate_and_estimate(cfg)
+        return snapshot_sdp_diagnostic.simulate_and_estimate(cfg)
     raise ValueError(
         f"unknown optimizer backend {cfg.optimizer_backend!r}; "
-        "expected 'full' or 'cora'"
+        "expected 'full' or 'snapshot_sdp_diagnostic'"
     )
